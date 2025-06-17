@@ -1,0 +1,356 @@
+{
+  "name": "Real-time Trend Miner",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.twitter.com/2/tweets/search/recent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "twitterOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{$node[\"Start\"].json[\"market\"]}} lang:en -is:retweet"
+            },
+            {
+              "name": "max_results",
+              "value": "100"
+            },
+            {
+              "name": "tweet.fields",
+              "value": "created_at,author_id,public_metrics,context_annotations"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{$env[\"TWITTER_BEARER\"]}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "b2c3d4e5-f6a7-8901-bcde-f23456789012",
+      "name": "Twitter Search API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1",
+          "name": "Twitter Bearer Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$node[\"Twitter Search API\"].json[\"meta\"][\"result_count\"]}}",
+              "operation": "larger",
+              "value2": 50
+            }
+          ]
+        }
+      },
+      "id": "c3d4e5f6-a7b8-9012-cdef-345678901234",
+      "name": "IF Result Count > 50",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "resource": "chatCompletion",
+        "model": "gpt-4-turbo-preview",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a social media trend analyst for GrayGhost AI. Analyze tweets and provide insights while adhering to these brand guidelines:\n\nBrand Tone Matrix:\n- Professional yet approachable\n- Data-driven insights\n- Innovative and forward-thinking\n- Inclusive and respectful\n\nPII Guardrails:\n- Never include personal names, handles, or identifiable information\n- Redact any SSN patterns (\\b\\d{3}-\\d{2}-\\d{4}\\b)\n- Remove email addresses and phone numbers\n- Focus on aggregate trends, not individual posts\n\nProvide a summary in exactly 120 characters or less."
+            },
+            {
+              "role": "user",
+              "content": "Analyze these trending tweets and provide key insights:\n{{JSON.stringify($node[\"Twitter Search API\"].json[\"data\"].slice(0, 10))}}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 150
+        }
+      },
+      "id": "d4e5f6a7-b8c9-0123-defa-456789012345",
+      "name": "OpenAI Analysis",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [850, 200],
+      "credentials": {
+        "openAiApi": {
+          "id": "2",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// PII Redaction Check\nconst summary = $node[\"OpenAI Analysis\"].json.choices[0].message.content;\n\n// PII Regex patterns\nconst ssnPattern = /\\b\\d{3}-\\d{2}-\\d{4}\\b/g;\nconst emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;\nconst phonePattern = /\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b/g;\n\n// Check for PII\nconst hasPII = ssnPattern.test(summary) || emailPattern.test(summary) || phonePattern.test(summary);\n\n// Redact if found\nlet cleanSummary = summary;\nif (hasPII) {\n  cleanSummary = summary\n    .replace(ssnPattern, '[REDACTED-SSN]')\n    .replace(emailPattern, '[REDACTED-EMAIL]')\n    .replace(phonePattern, '[REDACTED-PHONE]');\n}\n\n// Ensure 120 char limit\nconst truncatedSummary = cleanSummary.substring(0, 120);\n\nreturn {\n  summary: truncatedSummary,\n  pii_detected: hasPII,\n  pii_check_passed: !hasPII,\n  original_length: summary.length,\n  market: $node[\"Start\"].json[\"market\"],\n  result_count: $node[\"Twitter Search API\"].json[\"meta\"][\"result_count\"],\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "e5f6a7b8-c9d0-1234-efab-567890123456",
+      "name": "PII Check & Truncate",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "={{$env[\"NOTION_IDEAS_DB_ID\"]}}",
+        "properties": {
+          "values": [
+            {
+              "key": "Title",
+              "type": "title",
+              "titleValue": "={{$node[\"PII Check & Truncate\"].json[\"market\"]}} Trend: {{$node[\"PII Check & Truncate\"].json[\"summary\"].substring(0, 50)}}..."
+            },
+            {
+              "key": "Summary",
+              "type": "richText",
+              "richTextValue": "={{$node[\"PII Check & Truncate\"].json[\"summary\"]}}"
+            },
+            {
+              "key": "Market",
+              "type": "select",
+              "selectValue": "={{$node[\"PII Check & Truncate\"].json[\"market\"]}}"
+            },
+            {
+              "key": "Status",
+              "type": "select",
+              "selectValue": "Idea"
+            },
+            {
+              "key": "Tweet Count",
+              "type": "number",
+              "numberValue": "={{$node[\"PII Check & Truncate\"].json[\"result_count\"]}}"
+            },
+            {
+              "key": "PII Flag",
+              "type": "checkbox",
+              "checkboxValue": "={{$node[\"PII Check & Truncate\"].json[\"pii_detected\"]}}"
+            },
+            {
+              "key": "Created At",
+              "type": "date",
+              "dateValue": "={{$node[\"PII Check & Truncate\"].json[\"timestamp\"]}}"
+            }
+          ]
+        }
+      },
+      "id": "f6a7b8c9-d0e1-2345-fabc-678901234567",
+      "name": "Write to Notion Ideas",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1250, 200],
+      "credentials": {
+        "notionApi": {
+          "id": "3",
+          "name": "Notion OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "level": "warning",
+        "message": "Insufficient tweets for trend analysis",
+        "extra": {
+          "values": [
+            {
+              "key": "market",
+              "value": "={{$node[\"Start\"].json[\"market\"]}}"
+            },
+            {
+              "key": "result_count",
+              "value": "={{$node[\"Twitter Search API\"].json[\"meta\"][\"result_count\"]}}"
+            },
+            {
+              "key": "workflow_id",
+              "value": "={{$workflow.id}}"
+            },
+            {
+              "key": "execution_id",
+              "value": "={{$execution.id}}"
+            }
+          ]
+        },
+        "tags": {
+          "values": [
+            {
+              "key": "workflow",
+              "value": "real-time-trend-miner"
+            },
+            {
+              "key": "severity",
+              "value": "warning"
+            },
+            {
+              "key": "privacy_class",
+              "value": "Low"
+            }
+          ]
+        }
+      },
+      "id": "a7b8c9d0-e1f2-3456-abcd-789012345678",
+      "name": "Sentry Warning",
+      "type": "n8n-nodes-base.sentry",
+      "typeVersion": 1,
+      "position": [850, 400],
+      "credentials": {
+        "sentryApi": {
+          "id": "4",
+          "name": "Sentry DSN"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "message": "Trend analysis skipped: Insufficient data",
+        "additionalFields": {
+          "attachments": [
+            {
+              "color": "#FFC107",
+              "title": "Low Tweet Volume",
+              "text": "Market: {{$node[\"Start\"].json[\"market\"]}}\nTweet Count: {{$node[\"Twitter Search API\"].json[\"meta\"][\"result_count\"]}}\nThreshold: 50",
+              "footer": "Workflow: Real-time Trend Miner"
+            }
+          ]
+        }
+      },
+      "id": "b8c9d0e1-f2a3-4567-bcde-890123456789",
+      "name": "Slack Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1050, 400],
+      "credentials": {
+        "slackApi": {
+          "id": "5",
+          "name": "Slack OAuth2 API"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Twitter Search API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Twitter Search API": {
+      "main": [
+        [
+          {
+            "node": "IF Result Count > 50",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Result Count > 50": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sentry Warning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Analysis": {
+      "main": [
+        [
+          {
+            "node": "PII Check & Truncate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PII Check & Truncate": {
+      "main": [
+        [
+          {
+            "node": "Write to Notion Ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sentry Warning": {
+      "main": [
+        [
+          {
+            "node": "Slack Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [
+    {
+      "name": "core-workflow",
+      "createdAt": "2024-01-15T10:00:00.000Z"
+    },
+    {
+      "name": "trend-analysis",
+      "createdAt": "2024-01-15T10:00:00.000Z"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-15T10:00:00.000Z",
+  "versionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}

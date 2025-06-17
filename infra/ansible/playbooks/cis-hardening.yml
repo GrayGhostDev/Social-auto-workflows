@@ -1,0 +1,434 @@
+---
+# CIS Level-1 Hardening Playbook for Ubuntu 22.04 LTS
+# This playbook applies CIS benchmarks and configures FIPS-validated cryptographic modules
+
+- name: Apply CIS Level-1 Hardening to Ubuntu 22.04 LTS Nodes
+  hosts: k8s_nodes
+  become: yes
+  vars:
+    cis_level: 1
+    enable_fips: true
+    audit_rules_file: /etc/audit/rules.d/cis-hardening.rules
+    
+  tasks:
+    - name: Update all packages
+      apt:
+        upgrade: dist
+        update_cache: yes
+        cache_valid_time: 3600
+      tags: packages
+
+    - name: Install required packages for hardening
+      apt:
+        name:
+          - auditd
+          - audispd-plugins
+          - aide
+          - apparmor
+          - apparmor-utils
+          - fail2ban
+          - unattended-upgrades
+          - libpam-pwquality
+          - openssl
+          - rkhunter
+          - chkrootkit
+        state: present
+      tags: packages
+
+    - name: Configure FIPS mode with OpenSSL 3.0 provider
+      block:
+        - name: Create FIPS OpenSSL configuration
+          copy:
+            content: |
+              openssl_conf = openssl_init
+              
+              [openssl_init]
+              providers = provider_sect
+              
+              [provider_sect]
+              fips = fips_sect
+              base = base_sect
+              
+              [fips_sect]
+              activate = 1
+              
+              [base_sect]
+              activate = 1
+            dest: /etc/ssl/openssl.cnf.fips
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Install FIPS provider
+          command: openssl fipsinstall -out /etc/ssl/fipsmodule.cnf -module /usr/lib/x86_64-linux-gnu/ossl-modules/fips.so
+          args:
+            creates: /etc/ssl/fipsmodule.cnf
+
+        - name: Enable FIPS configuration
+          alternatives:
+            name: openssl.cnf
+            path: /etc/ssl/openssl.cnf.fips
+            priority: 50
+      tags: fips
+
+    - name: Configure kernel parameters for CIS compliance
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_file: /etc/sysctl.d/99-cis.conf
+        reload: yes
+      with_items:
+        - { name: 'kernel.randomize_va_space', value: '2' }
+        - { name: 'net.ipv4.conf.all.accept_source_route', value: '0' }
+        - { name: 'net.ipv4.conf.default.accept_source_route', value: '0' }
+        - { name: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.secure_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.secure_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.log_martians', value: '1' }
+        - { name: 'net.ipv4.conf.default.log_martians', value: '1' }
+        - { name: 'net.ipv4.icmp_echo_ignore_broadcasts', value: '1' }
+        - { name: 'net.ipv4.icmp_ignore_bogus_error_responses', value: '1' }
+        - { name: 'net.ipv4.conf.all.rp_filter', value: '1' }
+        - { name: 'net.ipv4.conf.default.rp_filter', value: '1' }
+        - { name: 'net.ipv4.tcp_syncookies', value: '1' }
+        - { name: 'net.ipv6.conf.all.accept_ra', value: '0' }
+        - { name: 'net.ipv6.conf.default.accept_ra', value: '0' }
+        - { name: 'net.ipv6.conf.all.accept_redirects', value: '0' }
+        - { name: 'net.ipv6.conf.default.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.send_redirects', value: '0' }
+        - { name: 'net.ipv4.ip_forward', value: '0' }
+        - { name: 'net.ipv6.conf.all.forwarding', value: '0' }
+        - { name: 'kernel.exec-shield', value: '1' }
+        - { name: 'kernel.dmesg_restrict', value: '1' }
+        - { name: 'kernel.kptr_restrict', value: '2' }
+        - { name: 'kernel.yama.ptrace_scope', value: '1' }
+      tags: kernel
+
+    - name: Configure audit rules for CIS compliance
+      copy:
+        content: |
+          # CIS Ubuntu 22.04 Benchmark Audit Rules
+          # Delete all existing rules
+          -D
+          
+          # Buffer Size
+          -b 8192
+          
+          # Failure Mode
+          -f 1
+          
+          # Time changes
+          -a always,exit -F arch=b64 -S adjtimex -S settimeofday -k time-change
+          -a always,exit -F arch=b32 -S adjtimex -S settimeofday -S stime -k time-change
+          -a always,exit -F arch=b64 -S clock_settime -k time-change
+          -a always,exit -F arch=b32 -S clock_settime -k time-change
+          -w /etc/localtime -p wa -k time-change
+          
+          # User/Group modifications
+          -w /etc/group -p wa -k identity
+          -w /etc/passwd -p wa -k identity
+          -w /etc/gshadow -p wa -k identity
+          -w /etc/shadow -p wa -k identity
+          -w /etc/security/opasswd -p wa -k identity
+          
+          # Network configuration
+          -a always,exit -F arch=b64 -S sethostname -S setdomainname -k system-locale
+          -a always,exit -F arch=b32 -S sethostname -S setdomainname -k system-locale
+          -w /etc/issue -p wa -k system-locale
+          -w /etc/issue.net -p wa -k system-locale
+          -w /etc/hosts -p wa -k system-locale
+          -w /etc/network -p wa -k system-locale
+          
+          # Login/Logout events
+          -w /var/log/faillog -p wa -k logins
+          -w /var/log/lastlog -p wa -k logins
+          -w /var/log/tallylog -p wa -k logins
+          
+          # Session initiation
+          -w /var/run/utmp -p wa -k session
+          -w /var/log/wtmp -p wa -k logins
+          -w /var/log/btmp -p wa -k logins
+          
+          # Discretionary access control permission modifications
+          -a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=4294967295 -k perm_mod
+          -a always,exit -F arch=b32 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=4294967295 -k perm_mod
+          -a always,exit -F arch=b64 -S chown -S fchown -S fchownat -S lchown -F auid>=1000 -F auid!=4294967295 -k perm_mod
+          -a always,exit -F arch=b32 -S chown -S fchown -S fchownat -S lchown -F auid>=1000 -F auid!=4294967295 -k perm_mod
+          -a always,exit -F arch=b64 -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid>=1000 -F auid!=4294967295 -k perm_mod
+          -a always,exit -F arch=b32 -S setxattr -S lsetxattr -S fsetxattr -S removexattr -S lremovexattr -S fremovexattr -F auid>=1000 -F auid!=4294967295 -k perm_mod
+          
+          # Unsuccessful file access attempts
+          -a always,exit -F arch=b64 -S creat -S open -S openat -S truncate -S ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=4294967295 -k access
+          -a always,exit -F arch=b32 -S creat -S open -S openat -S truncate -S ftruncate -F exit=-EACCES -F auid>=1000 -F auid!=4294967295 -k access
+          -a always,exit -F arch=b64 -S creat -S open -S openat -S truncate -S ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=4294967295 -k access
+          -a always,exit -F arch=b32 -S creat -S open -S openat -S truncate -S ftruncate -F exit=-EPERM -F auid>=1000 -F auid!=4294967295 -k access
+          
+          # Privileged commands
+          -a always,exit -F path=/usr/bin/passwd -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged-passwd
+          -a always,exit -F path=/usr/bin/sudo -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged-sudo
+          -a always,exit -F path=/usr/bin/su -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged-su
+          
+          # Kernel module loading and unloading
+          -w /sbin/insmod -p x -k modules
+          -w /sbin/rmmod -p x -k modules
+          -w /sbin/modprobe -p x -k modules
+          -a always,exit -F arch=b64 -S init_module -S delete_module -k modules
+          
+          # Make the configuration immutable
+          -e 2
+        dest: "{{ audit_rules_file }}"
+        owner: root
+        group: root
+        mode: '0640'
+      notify: restart auditd
+      tags: audit
+
+    - name: Configure fail2ban for SSH protection
+      copy:
+        content: |
+          [sshd]
+          enabled = true
+          port = ssh
+          filter = sshd
+          logpath = /var/log/auth.log
+          maxretry = 3
+          bantime = 3600
+          findtime = 600
+          
+          [sshd-ddos]
+          enabled = true
+          port = ssh
+          filter = sshd-ddos
+          logpath = /var/log/auth.log
+          maxretry = 10
+          bantime = 3600
+          findtime = 600
+        dest: /etc/fail2ban/jail.local
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart fail2ban
+      tags: fail2ban
+
+    - name: Configure password quality requirements
+      lineinfile:
+        path: /etc/security/pwquality.conf
+        regexp: "^{{ item.key }}"
+        line: "{{ item.key }} = {{ item.value }}"
+        state: present
+      with_dict:
+        minlen: 14
+        dcredit: -1
+        ucredit: -1
+        ocredit: -1
+        lcredit: -1
+        difok: 3
+        maxrepeat: 3
+        gecoscheck: 1
+        reject_username: ""
+        enforce_for_root: ""
+      tags: passwords
+
+    - name: Configure PAM for password policies
+      blockinfile:
+        path: /etc/pam.d/common-password
+        block: |
+          password requisite pam_pwquality.so retry=3
+          password required pam_pwhistory.so remember=5 use_authtok
+          password [success=1 default=ignore] pam_unix.so obscure use_authtok try_first_pass yescrypt
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - CIS Password Policies"
+      tags: passwords
+
+    - name: Set password aging policies
+      lineinfile:
+        path: /etc/login.defs
+        regexp: "^{{ item.key }}"
+        line: "{{ item.key }} {{ item.value }}"
+        state: present
+      with_dict:
+        PASS_MAX_DAYS: 90
+        PASS_MIN_DAYS: 7
+        PASS_WARN_AGE: 7
+        ENCRYPT_METHOD: SHA512
+        SHA_CRYPT_MIN_ROUNDS: 5000
+        SHA_CRYPT_MAX_ROUNDS: 5000
+      tags: passwords
+
+    - name: Configure SSH hardening
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^{{ item.key }}"
+        line: "{{ item.key }} {{ item.value }}"
+        state: present
+      with_dict:
+        Protocol: 2
+        PermitRootLogin: "no"
+        PasswordAuthentication: "no"
+        PermitEmptyPasswords: "no"
+        MaxAuthTries: 3
+        ClientAliveInterval: 300
+        ClientAliveCountMax: 0
+        LoginGraceTime: 60
+        X11Forwarding: "no"
+        AllowGroups: ssh-users
+        LogLevel: VERBOSE
+        MACs: "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,hmac-sha2-512,hmac-sha2-256"
+        Ciphers: "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+        KexAlgorithms: "curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256"
+        HostKeyAlgorithms: "ssh-ed25519-cert-v01@openssh.com,ssh-rsa-cert-v01@openssh.com,ssh-ed25519,ssh-rsa"
+      notify: restart sshd
+      tags: ssh
+
+    - name: Create ssh-users group
+      group:
+        name: ssh-users
+        state: present
+      tags: ssh
+
+    - name: Configure AppArmor profiles
+      command: aa-enforce /etc/apparmor.d/*
+      changed_when: false
+      tags: apparmor
+
+    - name: Initialize AIDE database
+      block:
+        - name: Check if AIDE database exists
+          stat:
+            path: /var/lib/aide/aide.db
+          register: aide_db
+
+        - name: Initialize AIDE if database doesn't exist
+          command: aideinit
+          when: not aide_db.stat.exists
+
+        - name: Copy AIDE database
+          command: cp /var/lib/aide/aide.db.new /var/lib/aide/aide.db
+          when: not aide_db.stat.exists
+      tags: aide
+
+    - name: Configure automatic security updates
+      copy:
+        content: |
+          Unattended-Upgrade::Allowed-Origins {
+              "${distro_id}:${distro_codename}";
+              "${distro_id}:${distro_codename}-security";
+              "${distro_id}ESMApps:${distro_codename}-apps-security";
+              "${distro_id}ESM:${distro_codename}-infra-security";
+          };
+          Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+          Unattended-Upgrade::MinimalSteps "true";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+          Unattended-Upgrade::Automatic-Reboot "false";
+          Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+      tags: updates
+
+    - name: Configure log rotation for security logs
+      copy:
+        content: |
+          /var/log/auth.log
+          /var/log/syslog
+          /var/log/kern.log
+          /var/log/audit/audit.log
+          {
+              daily
+              rotate 90
+              compress
+              delaycompress
+              missingok
+              notifempty
+              create 0640 root adm
+              sharedscripts
+              postrotate
+                  /usr/bin/systemctl reload rsyslog >/dev/null 2>&1 || true
+              endscript
+          }
+        dest: /etc/logrotate.d/security-logs
+        owner: root
+        group: root
+        mode: '0644'
+      tags: logging
+
+    - name: Set secure permissions on sensitive files
+      file:
+        path: "{{ item.path }}"
+        owner: root
+        group: "{{ item.group | default('root') }}"
+        mode: "{{ item.mode }}"
+      with_items:
+        - { path: '/etc/passwd', mode: '0644' }
+        - { path: '/etc/shadow', mode: '0640', group: 'shadow' }
+        - { path: '/etc/group', mode: '0644' }
+        - { path: '/etc/gshadow', mode: '0640', group: 'shadow' }
+        - { path: '/etc/ssh/sshd_config', mode: '0600' }
+        - { path: '/boot/grub/grub.cfg', mode: '0600' }
+        - { path: '/etc/crontab', mode: '0600' }
+        - { path: '/etc/cron.hourly', mode: '0700' }
+        - { path: '/etc/cron.daily', mode: '0700' }
+        - { path: '/etc/cron.weekly', mode: '0700' }
+        - { path: '/etc/cron.monthly', mode: '0700' }
+      tags: permissions
+
+    - name: Disable unnecessary services
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      with_items:
+        - avahi-daemon
+        - cups
+        - bluetooth
+      ignore_errors: yes
+      tags: services
+
+    - name: Configure firewall rules
+      ufw:
+        rule: "{{ item.rule }}"
+        port: "{{ item.port | default(omit) }}"
+        proto: "{{ item.proto | default(omit) }}"
+        src: "{{ item.src | default(omit) }}"
+        direction: "{{ item.direction | default('in') }}"
+        state: enabled
+      with_items:
+        - { rule: 'default', direction: 'incoming', port: 'deny' }
+        - { rule: 'default', direction: 'outgoing', port: 'allow' }
+        - { rule: 'allow', port: '22', proto: 'tcp' }
+        - { rule: 'allow', port: '443', proto: 'tcp' }
+        - { rule: 'allow', port: '6443', proto: 'tcp', src: '10.42.0.0/16' }  # Kubernetes API
+        - { rule: 'allow', port: '10250', proto: 'tcp', src: '10.42.0.0/16' } # Kubelet
+        - { rule: 'allow', port: '10251', proto: 'tcp', src: '10.42.0.0/16' } # kube-scheduler
+        - { rule: 'allow', port: '10252', proto: 'tcp', src: '10.42.0.0/16' } # kube-controller-manager
+      tags: firewall
+
+    - name: Enable and start security services
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      with_items:
+        - auditd
+        - fail2ban
+        - apparmor
+        - ufw
+      tags: services
+
+  handlers:
+    - name: restart auditd
+      systemd:
+        name: auditd
+        state: restarted
+
+    - name: restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
+
+    - name: restart sshd
+      systemd:
+        name: ssh
+        state: restarted

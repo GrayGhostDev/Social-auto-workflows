@@ -1,0 +1,338 @@
+# n8n Helm Chart Values for Development Environment
+# Configured for horizontal scaling with BullMQ and external Redis
+
+replicaCount: 3
+
+image:
+  repository: n8nio/n8n
+  pullPolicy: Always
+  tag: "latest"
+
+nameOverride: ""
+fullnameOverride: "n8n"
+
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/n8n-service-role
+  name: "n8n"
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "5678"
+  prometheus.io/path: "/metrics"
+  vault.hashicorp.com/agent-inject: "true"
+  vault.hashicorp.com/role: "n8n"
+  vault.hashicorp.com/agent-inject-secret-twitter: "n8n/dev"
+  vault.hashicorp.com/agent-inject-template-twitter: |
+    {{- with secret "n8n/dev" -}}
+    export TWITTER_BEARER="{{ .Data.data.TWITTER_BEARER }}"
+    export OPENAI_KEY="{{ .Data.data.OPENAI_KEY }}"
+    {{- end }}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+    - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 5678
+  annotations: {}
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/auth-url: "https://auth.grayghost.ai/oauth2/auth"
+    nginx.ingress.kubernetes.io/auth-signin: "https://auth.grayghost.ai/oauth2/start?rd=$scheme://$host$request_uri"
+  hosts:
+    - host: dev.n8n.grayghost.ai
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: n8n-dev-tls
+      hosts:
+        - dev.n8n.grayghost.ai
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 1000m
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - n8n
+        topologyKey: kubernetes.io/hostname
+
+# n8n Configuration
+n8n:
+  encryption_key: ""  # Will be injected from Vault
+  
+  # Database Configuration
+  database:
+    type: postgresdb
+    postgresdb:
+      host: "grayghost-ai-dev.cluster-XXXXX.us-east-1.rds.amazonaws.com"
+      port: 5432
+      database: n8n
+      user: n8n
+      password: ""  # Will be injected from Vault
+      schema: public
+      ssl:
+        enabled: true
+        rejectUnauthorized: false
+  
+  # Queue Configuration for BullMQ
+  queue:
+    type: bullmq
+    bullmq:
+      redis:
+        host: "grayghost-ai-dev.XXXXX.cache.amazonaws.com"
+        port: 6379
+        password: ""  # Will be injected from Vault
+        db: 0
+        tls: true
+      # Queue settings for horizontal scaling
+      settings:
+        stalledInterval: 30000
+        maxStalledCount: 1
+        lockDuration: 30000
+        lockRenewTime: 15000
+  
+  # Execution Configuration
+  executions:
+    mode: queue  # Enable queue mode for scaling
+    timeout: 3600
+    maxTimeout: 7200
+    saveDataOnError: all
+    saveDataOnSuccess: all
+    saveDataOnProgress: true
+    pruneData: true
+    pruneDataTimeout: 336  # 14 days
+  
+  # Generic Configuration
+  generic:
+    timezone: "UTC"
+  
+  # Metrics
+  metrics:
+    enabled: true
+    prefix: "n8n_"
+  
+  # Security
+  security:
+    basicAuth: false  # Disabled in favor of OAuth2
+    jwtAuth: true
+  
+  # Webhook Configuration
+  webhook:
+    baseUrl: "https://dev.n8n.grayghost.ai"
+  
+  # Editor UI
+  editor:
+    baseUrl: "https://dev.n8n.grayghost.ai"
+
+# External Services Configuration
+externalServices:
+  # Redis Configuration (External)
+  redis:
+    host: "grayghost-ai-dev.XXXXX.cache.amazonaws.com"
+    port: 6379
+    password: ""  # From Vault
+    tls:
+      enabled: true
+  
+  # PostgreSQL Configuration (External)
+  postgresql:
+    host: "grayghost-ai-dev.cluster-XXXXX.us-east-1.rds.amazonaws.com"
+    port: 5432
+    database: n8n
+    username: n8n
+    password: ""  # From Vault
+    ssl:
+      enabled: true
+      mode: require
+
+# Volume Configuration
+persistence:
+  enabled: true
+  type: pvc
+  accessMode: ReadWriteMany
+  size: 10Gi
+  storageClass: "efs-sc"
+  # Use EFS for shared storage across pods
+  annotations:
+    volume.beta.kubernetes.io/storage-class: "efs-sc"
+
+# Additional volumes for tmpfs (PII protection)
+extraVolumes:
+  - name: tmp
+    emptyDir:
+      medium: Memory
+      sizeLimit: 1Gi
+  - name: ffmpeg-tmp
+    emptyDir:
+      medium: Memory
+      sizeLimit: 2Gi
+
+extraVolumeMounts:
+  - name: tmp
+    mountPath: /tmp
+  - name: ffmpeg-tmp
+    mountPath: /var/tmp/ffmpeg
+
+# Environment Variables
+env:
+  # Node Options
+  - name: NODE_OPTIONS
+    value: "--max-old-space-size=1536"
+  
+  # n8n specific
+  - name: N8N_DIAGNOSTICS_ENABLED
+    value: "false"
+  
+  # Webhook tunnel (disabled in production)
+  - name: WEBHOOK_TUNNEL_URL
+    value: ""
+  
+  # Worker configuration
+  - name: N8N_WORKER_COUNT
+    value: "4"
+  
+  # Session configuration
+  - name: N8N_SESSION_EXPIRY_HOURS
+    value: "1"  # 60 minutes as per requirements
+  
+  # Brand colors for Canv-a-tor integration
+  - name: BRAND_COLOR_PRIMARY
+    value: "#FF5733"
+  - name: BRAND_COLOR_SECONDARY
+    value: "#33FF57"
+  - name: BRAND_COLOR_ACCENT
+    value: "#3357FF"
+
+# ConfigMaps
+configMaps:
+  - name: n8n-config
+    data:
+      nodes.exclude: '["n8n-nodes-base.executeCommand"]'  # Security: disable shell execution
+
+# Health checks
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /healthz
+    port: 5678
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /healthz
+    port: 5678
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Service Monitor for Prometheus
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  path: /metrics
+  labels:
+    release: prometheus
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Network Policies
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            name: ingress-nginx
+      - namespaceSelector:
+          matchLabels:
+            name: monitoring
+      ports:
+      - protocol: TCP
+        port: 5678
+  egress:
+    - to:
+      - namespaceSelector: {}
+      ports:
+      - protocol: TCP
+        port: 443
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            name: grayghost-ai
+      ports:
+      - protocol: TCP
+        port: 5432  # PostgreSQL
+      - protocol: TCP
+        port: 6379  # Redis
+
+# Vault Agent Injector
+vault:
+  enabled: true
+  injector:
+    enabled: true
+    agentImage: "hashicorp/vault:1.15.0"
+    template: |
+      {{- with secret "n8n/dev" -}}
+      export DB_POSTGRESDB_PASSWORD="{{ .Data.data.DB_PASSWORD }}"
+      export REDIS_PASSWORD="{{ .Data.data.REDIS_PASSWORD }}"
+      export N8N_ENCRYPTION_KEY="{{ .Data.data.ENCRYPTION_KEY }}"
+      export TWITTER_BEARER="{{ .Data.data.TWITTER_BEARER }}"
+      export OPENAI_KEY="{{ .Data.data.OPENAI_KEY }}"
+      {{- end }}
+
+# Labels
+labels:
+  app: n8n
+  environment: dev
+  team: automation
+  compliance: "pii-sensitive"
