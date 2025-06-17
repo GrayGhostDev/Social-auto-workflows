@@ -1,0 +1,270 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      emergency_deploy:
+        description: 'Emergency deployment (skip some checks)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  ENVIRONMENT: production
+  CLUSTER_NAME: prod-cluster
+  NAMESPACE: social-auto-prod
+
+jobs:
+  approval-check:
+    name: Deployment Approval
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for required approvals
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              head: context.sha,
+              base: 'main'
+            });
+            
+            if (pr.length === 0 && !context.payload.inputs?.emergency_deploy) {
+              core.setFailed('No approved PR found for this commit');
+            }
+
+  pre-deployment-validation:
+    name: Production Pre-deployment Checks
+    runs-on: ubuntu-latest
+    needs: approval-check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate release tag
+        run: |
+          if [[ ! "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]] && \
+             [[ "${{ github.event.inputs.emergency_deploy }}" != "true" ]]; then
+            echo "Error: Production deployments require a semantic version tag"
+            exit 1
+          fi
+
+      - name: Comprehensive security scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=low --fail-on=all
+
+      - name: PII compliance validation
+        run: |
+          echo "Running production PII compliance checks..."
+          ./scripts/pii-compliance-check.sh --production --fail-on-warning
+
+      - name: Brand compliance validation
+        run: |
+          echo "Validating brand guidelines for production..."
+          ./scripts/brand-compliance-check.sh --production
+
+      - name: License compliance check
+        run: |
+          echo "Checking license compliance..."
+          npx license-checker --production --onlyAllow "MIT;Apache-2.0;BSD-3-Clause;BSD-2-Clause;ISC"
+
+  backup-current-state:
+    name: Backup Production State
+    runs-on: ubuntu-latest
+    needs: pre-deployment-validation
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Create production backup
+        run: |
+          BACKUP_NAME="prod-backup-$(date +%Y%m%d-%H%M%S)"
+          echo "Creating production backup: $BACKUP_NAME"
+          
+          # Backup Kubernetes resources
+          kubectl get all,configmap,secret,pvc -n ${{ env.NAMESPACE }} -o yaml > $BACKUP_NAME-k8s.yaml
+          
+          # Backup database
+          ./scripts/backup-database.sh --env production --name $BACKUP_NAME
+          
+          # Store backups in S3
+          aws s3 cp $BACKUP_NAME-k8s.yaml s3://social-auto-backups/production/
+          
+          echo "backup_name=$BACKUP_NAME" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: backup-current-state
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region us-east-1 --name ${{ env.CLUSTER_NAME }}
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.12.0'
+
+      - name: Deploy with canary strategy
+        run: |
+          echo "Starting canary deployment..."
+          
+          # Deploy canary version (10% traffic)
+          helm upgrade --install social-auto-workflows-canary \
+            ./infra/helm/social-auto-workflows \
+            --namespace ${{ env.NAMESPACE }} \
+            --values ./infra/helm/social-auto-workflows/values.prod.yaml \
+            --set image.tag=${{ github.sha }} \
+            --set environment=production \
+            --set canary.enabled=true \
+            --set canary.weight=10 \
+            --wait --timeout=15m
+
+          # Wait and monitor canary
+          sleep 300  # 5 minutes
+          
+          # Check canary metrics
+          ./scripts/check-canary-metrics.sh --threshold 99.5 || exit 1
+
+      - name: Full production deployment
+        run: |
+          echo "Canary successful, proceeding with full deployment..."
+          
+          helm upgrade --install social-auto-workflows \
+            ./infra/helm/social-auto-workflows \
+            --namespace ${{ env.NAMESPACE }} \
+            --values ./infra/helm/social-auto-workflows/values.prod.yaml \
+            --set image.tag=${{ github.sha }} \
+            --set environment=production \
+            --set monitoring.enabled=true \
+            --set autoscaling.enabled=true \
+            --set replicas=3 \
+            --wait --timeout=15m
+
+          # Remove canary
+          helm uninstall social-auto-workflows-canary -n ${{ env.NAMESPACE }}
+
+      - name: Verify deployment
+        run: |
+          echo "Verifying production deployment..."
+          
+          # Wait for all pods to be ready
+          kubectl wait --for=condition=ready pod \
+            -l app=social-auto-workflows \
+            -n ${{ env.NAMESPACE }} \
+            --timeout=600s
+          
+          # Run production smoke tests
+          ENDPOINT=$(kubectl get svc social-auto-workflows -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          
+          curl -f https://$ENDPOINT/health || exit 1
+          curl -f https://$ENDPOINT/api/v1/workflows || exit 1
+          
+          # Validate all critical workflows
+          ./scripts/validate-critical-workflows.sh --env production
+
+      - name: Update DNS
+        if: success()
+        run: |
+          echo "Updating production DNS..."
+          ./scripts/update-dns.sh --env production --record social-auto.example.com
+
+      - name: Create release
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const release = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `v${new Date().toISOString().split('T')[0].replace(/-/g, '.')}`,
+              name: `Production Release ${new Date().toISOString().split('T')[0]}`,
+              body: `Production deployment of commit ${context.sha}`,
+              draft: false,
+              prerelease: false
+            });
+
+  post-deployment:
+    name: Post-deployment Tasks
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: success()
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run production tests
+        run: |
+          echo "Running production validation tests..."
+          npm run test:production
+
+      - name: Update monitoring
+        run: |
+          echo "Updating monitoring dashboards and alerts..."
+          ./scripts/update-monitoring.sh --env production
+
+      - name: Notify stakeholders
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          text: |
+            🚀 Production Deployment Successful!
+            Version: ${{ github.sha }}
+            Deployed by: ${{ github.actor }}
+            Environment: https://social-auto.example.com
+            Release Notes: ${{ github.event.head_commit.message }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: Update documentation
+        run: |
+          echo "Updating deployment documentation..."
+          ./scripts/update-deployment-docs.sh --version ${{ github.sha }}
+
+  rollback-on-failure:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [deploy, post-deployment]
+    if: failure()
+    steps:
+      - name: Initiate rollback
+        run: |
+          echo "Deployment failed, initiating rollback..."
+          ./scripts/rollback-deployment.sh \
+            --env production \
+            --backup ${{ needs.backup-current-state.outputs.backup_name }}
+
+      - name: Notify of rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          text: |
+            ❌ Production Deployment Failed - Rollback Initiated
+            Failed commit: ${{ github.sha }}
+            Check logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

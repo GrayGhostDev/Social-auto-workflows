@@ -1,0 +1,56 @@
+# CODEOWNERS for Social Auto Workflows
+# These owners will be the default owners for everything in the repo
+
+# Global owners - Engineering team owns all code by default
+* @GrayGhostDev/engineering-team
+
+# Infrastructure and DevOps
+/infra/ @GrayGhostDev/devops-team
+/terraform/ @GrayGhostDev/devops-team
+/.github/workflows/ @GrayGhostDev/devops-team
+/scripts/ @GrayGhostDev/devops-team
+Dockerfile @GrayGhostDev/devops-team
+docker-compose.yml @GrayGhostDev/devops-team
+.dockerignore @GrayGhostDev/devops-team
+
+# Kubernetes configurations
+/k8s/ @GrayGhostDev/devops-team @GrayGhostDev/sre-team
+*.yaml @GrayGhostDev/devops-team
+*.yml @GrayGhostDev/devops-team
+
+# Security-sensitive files
+**/secrets.* @GrayGhostDev/security-team
+**/credentials.* @GrayGhostDev/security-team
+**/*key* @GrayGhostDev/security-team
+**/*token* @GrayGhostDev/security-team
+.env* @GrayGhostDev/security-team
+/docs/SECURITY.md @GrayGhostDev/security-team
+
+# n8n Workflows - Content team should review
+/workflows/ @GrayGhostDev/content-team @GrayGhostDev/engineering-team
+*.n8n.json @GrayGhostDev/content-team
+
+# Documentation
+/docs/ @GrayGhostDev/technical-writers
+*.md @GrayGhostDev/technical-writers
+README.md @GrayGhostDev/technical-writers @GrayGhostDev/engineering-team
+
+# Configuration files
+package.json @GrayGhostDev/engineering-team
+package-lock.json @GrayGhostDev/engineering-team
+tsconfig.json @GrayGhostDev/engineering-team
+.eslintrc* @GrayGhostDev/engineering-team
+.prettierrc* @GrayGhostDev/engineering-team
+
+# Tests
+/tests/ @GrayGhostDev/qa-team @GrayGhostDev/engineering-team
+*.test.* @GrayGhostDev/qa-team
+*.spec.* @GrayGhostDev/qa-team
+
+# CI/CD and GitHub configurations
+/.github/ @GrayGhostDev/devops-team @GrayGhostDev/engineering-team
+.github/CODEOWNERS @GrayGhostDev/devops-team @GrayGhostDev/security-team
+
+# Release files
+CHANGELOG.md @GrayGhostDev/release-managers
+VERSION @GrayGhostDev/release-managers

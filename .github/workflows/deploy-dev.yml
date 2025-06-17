@@ -1,0 +1,110 @@
+name: Deploy to Development
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+env:
+  ENVIRONMENT: development
+  CLUSTER_NAME: dev-cluster
+  NAMESPACE: social-auto-dev
+
+jobs:
+  deploy:
+    name: Deploy to Dev Environment
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region us-east-1 --name ${{ env.CLUSTER_NAME }}
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.12.0'
+
+      - name: Deploy n8n workflows
+        run: |
+          echo "Deploying workflows to development..."
+          kubectl create configmap n8n-workflows \
+            --from-file=workflows/ \
+            --namespace=${{ env.NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy application with Helm
+        run: |
+          helm upgrade --install social-auto-workflows \
+            ./infra/helm/social-auto-workflows \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --values ./infra/helm/social-auto-workflows/values.dev.yaml \
+            --set image.tag=${{ github.sha }} \
+            --set environment=development \
+            --wait
+
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests..."
+          kubectl wait --for=condition=ready pod \
+            -l app=social-auto-workflows \
+            -n ${{ env.NAMESPACE }} \
+            --timeout=300s
+          
+          # Basic health check
+          ENDPOINT=$(kubectl get svc social-auto-workflows -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          curl -f http://$ENDPOINT/health || exit 1
+
+      - name: Update deployment status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            const description = status === 'success' ? 'Deployed to development' : 'Development deployment failed';
+            
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: status,
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: description,
+              context: 'deployment/development'
+            });
+
+      - name: Notify Slack
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Development Deployment ${{ job.status }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+      - name: Cleanup old deployments
+        if: success()
+        run: |
+          # Keep only last 5 deployments
+          kubectl get deployments -n ${{ env.NAMESPACE }} \
+            -l app=social-auto-workflows \
+            --sort-by=.metadata.creationTimestamp \
+            -o name | head -n -5 | xargs -r kubectl delete -n ${{ env.NAMESPACE }}

@@ -1,0 +1,181 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+env:
+  ENVIRONMENT: staging
+  CLUSTER_NAME: staging-cluster
+  NAMESPACE: social-auto-staging
+
+jobs:
+  pre-deployment-checks:
+    name: Pre-deployment Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate PII compliance
+        run: |
+          echo "Running comprehensive PII compliance checks..."
+          # Enhanced PII scanning for staging
+          ./scripts/pii-compliance-check.sh --strict
+
+      - name: Validate brand compliance
+        run: |
+          echo "Checking brand guideline compliance..."
+          # Brand asset validation
+          ./scripts/brand-compliance-check.sh
+
+      - name: Security scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=medium
+
+  deploy:
+    name: Deploy to Staging Environment
+    runs-on: ubuntu-latest
+    needs: pre-deployment-checks
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region us-east-1 --name ${{ env.CLUSTER_NAME }}
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.12.0'
+
+      - name: Create deployment backup
+        run: |
+          echo "Creating backup of current staging deployment..."
+          kubectl get all -n ${{ env.NAMESPACE }} -o yaml > staging-backup-$(date +%Y%m%d-%H%M%S).yaml
+          
+      - name: Deploy n8n workflows
+        run: |
+          echo "Deploying workflows to staging..."
+          kubectl create configmap n8n-workflows \
+            --from-file=workflows/ \
+            --namespace=${{ env.NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy application with Helm
+        run: |
+          helm upgrade --install social-auto-workflows \
+            ./infra/helm/social-auto-workflows \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --values ./infra/helm/social-auto-workflows/values.staging.yaml \
+            --set image.tag=${{ github.sha }} \
+            --set environment=staging \
+            --set monitoring.enabled=true \
+            --set autoscaling.enabled=true \
+            --wait --timeout=10m
+
+      - name: Run integration tests
+        run: |
+          echo "Running staging integration tests..."
+          npm run test:staging
+          
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests..."
+          kubectl wait --for=condition=ready pod \
+            -l app=social-auto-workflows \
+            -n ${{ env.NAMESPACE }} \
+            --timeout=300s
+          
+          ENDPOINT=$(kubectl get svc social-auto-workflows -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          
+          # Comprehensive health checks
+          curl -f https://$ENDPOINT/health || exit 1
+          curl -f https://$ENDPOINT/api/v1/workflows || exit 1
+
+      - name: Performance baseline test
+        run: |
+          echo "Running performance baseline tests..."
+          # Run k6 or similar performance tests
+          ./scripts/performance-test.sh --env staging --baseline
+
+      - name: Update deployment status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            const description = status === 'success' ? 'Deployed to staging' : 'Staging deployment failed';
+            
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: status,
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: description,
+              context: 'deployment/staging'
+            });
+
+      - name: Create deployment record
+        if: success()
+        run: |
+          echo '{
+            "environment": "staging",
+            "version": "${{ github.sha }}",
+            "timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",
+            "deployer": "${{ github.actor }}",
+            "status": "success"
+          }' > deployment-record.json
+          
+          # Store in S3 for audit trail
+          aws s3 cp deployment-record.json \
+            s3://social-auto-deployments/staging/$(date +%Y/%m/%d)/${{ github.sha }}.json
+
+      - name: Notify teams
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Staging Deployment ${{ job.status }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}
+            Environment: https://staging.social-auto.example.com
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          
+  post-deployment:
+    name: Post-deployment Validation
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: success()
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run E2E tests
+        run: |
+          echo "Running E2E test suite..."
+          npm run test:e2e:staging
+          
+      - name: Validate monitoring
+        run: |
+          echo "Checking monitoring and alerting..."
+          ./scripts/validate-monitoring.sh --env staging

@@ -1,0 +1,230 @@
+name: Branch Cleanup
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly on Monday at 2 AM UTC
+  workflow_dispatch:
+
+jobs:
+  cleanup-merged-branches:
+    name: Delete Merged Branches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Delete merged feature branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branches = await github.rest.repos.listBranches({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            
+            const protectedBranches = ['main', 'dev', 'staging'];
+            const protectedPrefixes = ['release/', 'hotfix/', 'infra/'];
+            
+            for (const branch of branches.data) {
+              // Skip protected branches
+              if (protectedBranches.includes(branch.name) || 
+                  protectedPrefixes.some(prefix => branch.name.startsWith(prefix))) {
+                continue;
+              }
+              
+              // Check if branch is merged
+              try {
+                const comparison = await github.rest.repos.compareCommits({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  base: branch.name,
+                  head: 'main'
+                });
+                
+                if (comparison.data.behind_by === 0) {
+                  console.log(`Deleting merged branch: ${branch.name}`);
+                  await github.rest.git.deleteRef({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    ref: `heads/${branch.name}`
+                  });
+                }
+              } catch (error) {
+                console.log(`Could not process branch ${branch.name}: ${error.message}`);
+              }
+            }
+
+  cleanup-stale-branches:
+    name: Flag Stale Branches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find stale branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const staleDays = 90;
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - staleDays);
+            
+            const branches = await github.rest.repos.listBranches({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            
+            const staleBranches = [];
+            
+            for (const branch of branches.data) {
+              // Skip protected branches
+              if (['main', 'dev', 'staging'].includes(branch.name)) {
+                continue;
+              }
+              
+              // Get last commit on branch
+              const commit = await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: branch.commit.sha
+              });
+              
+              const lastCommitDate = new Date(commit.data.commit.author.date);
+              
+              if (lastCommitDate < cutoffDate) {
+                staleBranches.push({
+                  name: branch.name,
+                  lastCommit: lastCommitDate.toISOString(),
+                  daysSinceLastCommit: Math.floor((new Date() - lastCommitDate) / (1000 * 60 * 60 * 24))
+                });
+              }
+            }
+            
+            if (staleBranches.length > 0) {
+              // Create issue with stale branches
+              const issueBody = `## Stale Branches Report
+              
+              The following branches have not been updated in over ${staleDays} days:
+              
+              | Branch | Last Commit | Days Since Last Commit |
+              |--------|-------------|------------------------|
+              ${staleBranches.map(b => `| ${b.name} | ${b.lastCommit} | ${b.daysSinceLastCommit} |`).join('\n')}
+              
+              Please review and delete if no longer needed.`;
+              
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: `Stale Branches Report - ${new Date().toISOString().split('T')[0]}`,
+                body: issueBody,
+                labels: ['maintenance', 'cleanup']
+              });
+            }
+
+  cleanup-spike-branches:
+    name: Archive Spike Branches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Archive old spike branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branches = await github.rest.repos.listBranches({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            
+            const spikeBranches = branches.data.filter(b => b.name.startsWith('spike/'));
+            const cutoffDate = new Date();
+            cutoffDate.setHours(cutoffDate.getHours() - 48); // 48 hour limit for spikes
+            
+            for (const branch of spikeBranches) {
+              const commit = await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: branch.commit.sha
+              });
+              
+              const branchDate = new Date(commit.data.commit.author.date);
+              
+              if (branchDate < cutoffDate) {
+                console.log(`Archiving spike branch: ${branch.name}`);
+                
+                // Create archive tag
+                await github.rest.git.createRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `refs/tags/archive/${branch.name}`,
+                  sha: branch.commit.sha
+                });
+                
+                // Delete branch
+                await github.rest.git.deleteRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `heads/${branch.name}`
+                });
+              }
+            }
+
+  cleanup-bot-branches:
+    name: Merge Bot Update Branches
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auto-merge bot branches
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branches = await github.rest.repos.listBranches({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            
+            const botBranches = branches.data.filter(b => b.name.startsWith('bot/'));
+            
+            for (const branch of botBranches) {
+              try {
+                // Check if there's an open PR
+                const prs = await github.rest.pulls.list({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  head: `${context.repo.owner}:${branch.name}`,
+                  state: 'open'
+                });
+                
+                if (prs.data.length > 0) {
+                  const pr = prs.data[0];
+                  
+                  // Check if all checks have passed
+                  const checks = await github.rest.checks.listForRef({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    ref: branch.name
+                  });
+                  
+                  const allChecksPassed = checks.data.check_runs.every(
+                    check => check.status === 'completed' && check.conclusion === 'success'
+                  );
+                  
+                  if (allChecksPassed) {
+                    // Auto-merge the PR
+                    await github.rest.pulls.merge({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: pr.number,
+                      merge_method: 'squash'
+                    });
+                    
+                    console.log(`Auto-merged bot PR #${pr.number}`);
+                  }
+                }
+              } catch (error) {
+                console.log(`Error processing bot branch ${branch.name}: ${error.message}`);
+              }
+            }

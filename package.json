@@ -1,0 +1,61 @@
+{
+  "name": "social-auto-workflows",
+  "version": "1.0.0",
+  "description": "Enterprise social media automation platform with n8n workflows",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest --coverage",
+    "test:integration": "jest --testPathPattern=tests/integration",
+    "test:staging": "jest --testPathPattern=tests/e2e --env=staging",
+    "test:production": "jest --testPathPattern=tests/smoke --env=production",
+    "test:e2e:staging": "cypress run --env environment=staging",
+    "lint": "eslint . --ext .js,.ts,.jsx,.tsx",
+    "lint:fix": "eslint . --ext .js,.ts,.jsx,.tsx --fix",
+    "build": "tsc && webpack",
+    "dev": "nodemon",
+    "typecheck": "tsc --noEmit",
+    "prepare": "husky install",
+    "commitlint": "commitlint --edit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GrayGhostDev/Social-auto-workflows.git"
+  },
+  "keywords": [
+    "n8n",
+    "automation",
+    "social-media",
+    "workflows"
+  ],
+  "author": "Gray Ghost Dev",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/GrayGhostDev/Social-auto-workflows/issues"
+  },
+  "homepage": "https://github.com/GrayGhostDev/Social-auto-workflows#readme",
+  "devDependencies": {
+    "@commitlint/cli": "^17.0.0",
+    "@commitlint/config-conventional": "^17.0.0",
+    "@types/jest": "^29.0.0",
+    "@types/node": "^18.0.0",
+    "@typescript-eslint/eslint-plugin": "^5.0.0",
+    "@typescript-eslint/parser": "^5.0.0",
+    "cypress": "^12.0.0",
+    "eslint": "^8.0.0",
+    "husky": "^8.0.0",
+    "jest": "^29.0.0",
+    "nodemon": "^3.0.0",
+    "ts-jest": "^29.0.0",
+    "typescript": "^5.0.0",
+    "webpack": "^5.0.0",
+    "webpack-cli": "^5.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.0.0",
+    "dotenv": "^16.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  }
+}

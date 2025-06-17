@@ -1,0 +1,258 @@
+name: CI Pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - dev
+      - staging
+      - 'feature/**'
+      - 'fix/**'
+      - 'chore/**'
+
+env:
+  NODE_VERSION: '18.x'
+
+jobs:
+  validate-branch:
+    name: Validate Branch Name
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch naming convention
+        run: |
+          branch=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
+          if [[ ! "$branch" =~ ^(main|dev|staging|feature/.*|fix/.*|chore/.*|security/.*|spike/.*|release/.*|hotfix/.*|infra/.*|docs|bot/.*)$ ]]; then
+            echo "Error: Branch name '$branch' does not follow naming convention"
+            exit 1
+          fi
+
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    needs: validate-branch
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Check commit messages
+        run: npx commitlint --from ${{ github.event.pull_request.base.sha || github.event.before }}
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: validate-branch
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: validate-branch
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Snyk security scan
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+
+      - name: Run PII compliance scan
+        run: |
+          # Custom PII scanning logic
+          echo "Running PII compliance checks..."
+          # This would be replaced with actual PII scanning tool
+          find . -type f -name "*.js" -o -name "*.ts" -o -name "*.json" | \
+            xargs grep -l -E "(ssn|social.?security|tax.?id|passport|driver.?license)" || true
+
+  validate-workflows:
+    name: Validate n8n Workflows
+    runs-on: ubuntu-latest
+    needs: validate-branch
+    if: contains(github.event.head_commit.modified, 'workflows/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate workflow JSON
+        run: |
+          for file in workflows/*.json; do
+            if [ -f "$file" ]; then
+              echo "Validating $file..."
+              jq empty "$file" || (echo "Invalid JSON in $file" && exit 1)
+            fi
+          done
+
+      - name: Check for hardcoded credentials
+        run: |
+          echo "Scanning workflows for hardcoded credentials..."
+          grep -r -E "(api[_-]?key|password|secret|token)" workflows/ | \
+            grep -v -E "(getNodeParameter|\\$\\(|\\{\\{)" || true
+
+  terraform-validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    needs: validate-branch
+    if: contains(github.event.head_commit.modified, 'infra/terraform/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+
+      - name: Terraform Format Check
+        run: |
+          cd infra/terraform
+          terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: |
+          cd infra/terraform
+          terraform init -backend=false
+
+      - name: Terraform Validate
+        run: |
+          cd infra/terraform
+          terraform validate
+
+  helm-validate:
+    name: Validate Helm Charts
+    runs-on: ubuntu-latest
+    needs: validate-branch
+    if: contains(github.event.head_commit.modified, 'infra/helm/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.12.0'
+
+      - name: Lint Helm charts
+        run: |
+          for chart in infra/helm/*/; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              echo "Linting $chart..."
+              helm lint "$chart"
+            fi
+          done
+
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    needs: [lint, test, security-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run integration tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test
+        run: npm run test:integration
+
+  notify-status:
+    name: Notify Build Status
+    runs-on: ubuntu-latest
+    needs: [build, integration-tests]
+    if: always()
+    steps:
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ CI Pipeline failed. Please check the logs.'
+            })
+
+      - name: Notify on success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ All CI checks passed!'
+            })

@@ -1,0 +1,161 @@
+{
+  "branch_protection_rules": {
+    "main": {
+      "required_status_checks": {
+        "strict": true,
+        "contexts": [
+          "CI Pipeline / Lint Code",
+          "CI Pipeline / Run Tests",
+          "CI Pipeline / Security Scanning",
+          "CI Pipeline / Build Application"
+        ]
+      },
+      "enforce_admins": true,
+      "required_pull_request_reviews": {
+        "required_approving_review_count": 2,
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": true,
+        "required_review_from_codeowners": true
+      },
+      "restrictions": {
+        "users": [],
+        "teams": ["release-managers"]
+      },
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "required_conversation_resolution": true,
+      "lock_branch": false,
+      "allow_auto_merge": false,
+      "require_signed_commits": true
+    },
+    "staging": {
+      "required_status_checks": {
+        "strict": true,
+        "contexts": [
+          "CI Pipeline / Lint Code",
+          "CI Pipeline / Run Tests",
+          "CI Pipeline / Security Scanning",
+          "Pre-deployment Validation"
+        ]
+      },
+      "enforce_admins": false,
+      "required_pull_request_reviews": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": false
+      },
+      "restrictions": null,
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "required_conversation_resolution": true,
+      "require_signed_commits": true
+    },
+    "dev": {
+      "required_status_checks": {
+        "strict": false,
+        "contexts": [
+          "CI Pipeline / Lint Code",
+          "CI Pipeline / Run Tests"
+        ]
+      },
+      "enforce_admins": false,
+      "required_pull_request_reviews": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews": false,
+        "require_code_owner_reviews": false
+      },
+      "restrictions": null,
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "required_conversation_resolution": false,
+      "require_signed_commits": true
+    },
+    "release/*": {
+      "required_status_checks": {
+        "strict": true,
+        "contexts": [
+          "CI Pipeline / Lint Code",
+          "CI Pipeline / Run Tests",
+          "CI Pipeline / Security Scanning",
+          "CI Pipeline / Build Application"
+        ]
+      },
+      "enforce_admins": true,
+      "required_pull_request_reviews": {
+        "required_approving_review_count": 2,
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": true
+      },
+      "restrictions": {
+        "users": [],
+        "teams": ["release-managers"]
+      },
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "required_conversation_resolution": true,
+      "require_signed_commits": true
+    },
+    "hotfix/*": {
+      "required_status_checks": {
+        "strict": false,
+        "contexts": [
+          "CI Pipeline / Security Scanning"
+        ]
+      },
+      "enforce_admins": false,
+      "required_pull_request_reviews": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews": false,
+        "require_code_owner_reviews": false
+      },
+      "restrictions": {
+        "users": [],
+        "teams": ["sre-team", "security-team"]
+      },
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "required_conversation_resolution": false,
+      "require_signed_commits": true
+    },
+    "infra/*": {
+      "required_status_checks": {
+        "strict": true,
+        "contexts": [
+          "Terraform Validate",
+          "Helm Validate"
+        ]
+      },
+      "enforce_admins": false,
+      "required_pull_request_reviews": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews": true,
+        "require_code_owner_reviews": true
+      },
+      "restrictions": {
+        "users": [],
+        "teams": ["devops-team"]
+      },
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "required_conversation_resolution": true,
+      "require_signed_commits": true
+    },
+    "docs": {
+      "required_status_checks": {
+        "strict": false,
+        "contexts": []
+      },
+      "enforce_admins": false,
+      "required_pull_request_reviews": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews": false,
+        "require_code_owner_reviews": false
+      },
+      "restrictions": null,
+      "allow_force_pushes": false,
+      "allow_deletions": false,
+      "required_conversation_resolution": false,
+      "require_signed_commits": false
+    }
+  }
+}
