@@ -1,0 +1,263 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: grayghost-ai
+data:
+  system-overview.json: |
+    {
+      "dashboard": {
+        "title": "GrayGhost AI - System Overview",
+        "panels": [
+          {
+            "title": "Request Rate",
+            "targets": [
+              {
+                "expr": "sum(rate(http_requests_total[5m])) by (job)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "title": "Error Rate",
+            "targets": [
+              {
+                "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) by (job) / sum(rate(http_requests_total[5m])) by (job)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "title": "P95 Response Time",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (job, le))"
+              }
+            ],
+            "alert": {
+              "conditions": [
+                {
+                  "evaluator": {
+                    "params": [2],
+                    "type": "gt"
+                  },
+                  "query": {
+                    "params": ["A", "5m", "now"]
+                  },
+                  "type": "query"
+                }
+              ],
+              "name": "P95 Response Time Alert"
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          }
+        ]
+      }
+    }
+
+  n8n-performance.json: |
+    {
+      "dashboard": {
+        "title": "n8n Workflow Performance",
+        "panels": [
+          {
+            "title": "Workflow Executions",
+            "targets": [
+              {
+                "expr": "sum(rate(n8n_workflow_execution_total[5m])) by (workflow_id, status)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "title": "Execution Duration",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, sum(rate(n8n_workflow_execution_duration_seconds_bucket[5m])) by (workflow_id, le))"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "title": "Failed Executions",
+            "targets": [
+              {
+                "expr": "sum(rate(n8n_workflow_execution_failed_total[5m])) by (workflow_id, error_type)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          },
+          {
+            "title": "Queue Length",
+            "targets": [
+              {
+                "expr": "n8n_queue_length"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+          }
+        ]
+      }
+    }
+
+  brand-compliance.json: |
+    {
+      "dashboard": {
+        "title": "Brand Compliance Metrics",
+        "panels": [
+          {
+            "title": "Brand Color Violations",
+            "targets": [
+              {
+                "expr": "sum(rate(canvator_brand_color_violations_total[5m]))"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "title": "Content Generation by Type",
+            "targets": [
+              {
+                "expr": "sum(rate(canvator_content_generated_total[5m])) by (content_type)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "title": "Brand Asset Usage",
+            "targets": [
+              {
+                "expr": "sum(rate(canvator_brand_asset_used_total[5m])) by (asset_type)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          },
+          {
+            "title": "Compliance Check Results",
+            "targets": [
+              {
+                "expr": "sum(rate(brand_compliance_check_total[5m])) by (result)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+          }
+        ]
+      }
+    }
+
+  security-monitoring.json: |
+    {
+      "dashboard": {
+        "title": "Security Monitoring",
+        "panels": [
+          {
+            "title": "WAF Blocked Requests",
+            "targets": [
+              {
+                "expr": "sum(rate(aws_wafv2_blocked_requests_sum[5m])) by (rule)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "title": "Authentication Failures",
+            "targets": [
+              {
+                "expr": "sum(rate(oauth2_proxy_authentication_failures_total[5m]))"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "title": "Geo-blocked Requests",
+            "targets": [
+              {
+                "expr": "sum(rate(aws_wafv2_blocked_requests_sum{rule=\"GeoBlockingRule\"}[5m])) by (country)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          },
+          {
+            "title": "Rate Limit Violations",
+            "targets": [
+              {
+                "expr": "sum(rate(aws_wafv2_blocked_requests_sum{rule=\"RateLimitRule\"}[5m]))"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+          }
+        ]
+      }
+    }
+
+  cost-analysis.json: |
+    {
+      "dashboard": {
+        "title": "Cost Analysis",
+        "panels": [
+          {
+            "title": "Resource Utilization",
+            "targets": [
+              {
+                "expr": "sum(container_memory_working_set_bytes) by (namespace) / 1024 / 1024 / 1024"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "title": "CPU Usage by Service",
+            "targets": [
+              {
+                "expr": "sum(rate(container_cpu_usage_seconds_total[5m])) by (pod)"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "title": "Storage Usage",
+            "targets": [
+              {
+                "expr": "sum(kubelet_volume_stats_used_bytes) by (persistentvolumeclaim) / 1024 / 1024 / 1024"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          },
+          {
+            "title": "Network Transfer",
+            "targets": [
+              {
+                "expr": "sum(rate(container_network_transmit_bytes_total[5m])) by (pod) / 1024 / 1024"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+          }
+        ]
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: grayghost-ai
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      url: http://prometheus:9090
+      isDefault: true
+      editable: true
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki:3100
+      jsonData:
+        derivedFields:
+          - datasourceName: Tempo
+            matcherRegex: "trace_id=(\\w+)"
+            name: TraceID
+            url: "$${__value.raw}"
+      editable: true

@@ -1,0 +1,314 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: grayghost-ai
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: 'grayghost-ai'
+        environment: '${ENVIRONMENT}'
+
+    # Alertmanager configuration
+    alerting:
+      alertmanagers:
+      - static_configs:
+        - targets:
+          - alertmanager:9093
+
+    # Load rules once and periodically evaluate them
+    rule_files:
+      - '/etc/prometheus/rules/*.yml'
+
+    # Scrape configurations
+    scrape_configs:
+      # Prometheus self-monitoring
+      - job_name: 'prometheus'
+        static_configs:
+        - targets: ['localhost:9090']
+
+      # Kubernetes API server
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+        - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: default;kubernetes;https
+
+      # Kubernetes nodes
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+        - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+
+      # Kubernetes pods
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: true
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          action: replace
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+          target_label: __address__
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: kubernetes_namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: kubernetes_pod_name
+
+      # n8n metrics
+      - job_name: 'n8n'
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          action: keep
+          regex: n8n
+        - source_labels: [__meta_kubernetes_pod_container_port_number]
+          action: keep
+          regex: "5678"
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+        metric_relabel_configs:
+        - source_labels: [__name__]
+          regex: 'n8n_.*'
+          action: keep
+
+      # Shared services
+      - job_name: 'shared-services'
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_label_component]
+          action: keep
+          regex: shared-service
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          target_label: service
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+
+      # PostgreSQL exporter
+      - job_name: 'postgres'
+        static_configs:
+        - targets: ['postgres-exporter:9187']
+        relabel_configs:
+        - source_labels: [__address__]
+          target_label: instance
+          replacement: postgres-cluster
+
+      # Redis exporter
+      - job_name: 'redis'
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          action: keep
+          regex: redis-cluster
+        - source_labels: [__meta_kubernetes_pod_container_port_number]
+          action: keep
+          regex: "9121"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: grayghost-ai
+data:
+  alerts.yml: |
+    groups:
+    - name: performance
+      interval: 30s
+      rules:
+      - alert: HighResponseTime
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (job, le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "P95 response time exceeds 2 seconds"
+          description: "{{ $labels.job }} has a P95 response time of {{ $value }}s (threshold: 2s)"
+          runbook_url: "https://wiki.grayghost.ai/runbooks/high-response-time"
+
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m])) by (job)
+          /
+          sum(rate(http_requests_total[5m])) by (job)
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Error rate exceeds 5%"
+          description: "{{ $labels.job }} has an error rate of {{ $value | humanizePercentage }}"
+          runbook_url: "https://wiki.grayghost.ai/runbooks/high-error-rate"
+
+    - name: resources
+      interval: 30s
+      rules:
+      - alert: PodMemoryUsage
+        expr: |
+          (sum(container_memory_working_set_bytes{pod!=""}) by (pod, namespace) / 
+           sum(container_spec_memory_limit_bytes{pod!=""}) by (pod, namespace)) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Pod memory usage above 90%"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} memory usage is {{ $value | humanizePercentage }}"
+
+      - alert: PodCPUUsage
+        expr: |
+          (sum(rate(container_cpu_usage_seconds_total{pod!=""}[5m])) by (pod, namespace) /
+           sum(container_spec_cpu_quota{pod!=""}/container_spec_cpu_period{pod!=""}) by (pod, namespace)) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Pod CPU usage above 90%"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} CPU usage is {{ $value | humanizePercentage }}"
+
+    - name: availability
+      interval: 30s
+      rules:
+      - alert: PodNotReady
+        expr: |
+          kube_pod_status_ready{condition="false"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Pod is not ready"
+          description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has been not ready for 5 minutes"
+
+      - alert: DeploymentReplicasUnavailable
+        expr: |
+          kube_deployment_status_replicas_unavailable > 0
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Deployment has unavailable replicas"
+          description: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has {{ $value }} unavailable replicas"
+
+    - name: database
+      interval: 30s
+      rules:
+      - alert: PostgreSQLDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: database
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL instance {{ $labels.instance }} is down"
+
+      - alert: PostgreSQLSlowQueries
+        expr: |
+          rate(pg_stat_database_blks_read{datname="n8n"}[5m]) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "PostgreSQL experiencing slow queries"
+          description: "PostgreSQL database {{ $labels.datname }} has high block reads: {{ $value }}/s"
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Redis is down"
+          description: "Redis instance {{ $labels.instance }} is down"
+
+    - name: security
+      interval: 30s
+      rules:
+      - alert: WAFHighBlockRate
+        expr: |
+          sum(rate(aws_wafv2_blocked_requests_sum[5m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "WAF blocking high number of requests"
+          description: "WAF is blocking {{ $value }} requests per second"
+
+      - alert: UnauthorizedAccessAttempts
+        expr: |
+          sum(rate(nginx_ingress_controller_requests{status="401"}[5m])) by (ingress) > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High number of unauthorized access attempts"
+          description: "{{ $labels.ingress }} is receiving {{ $value }} unauthorized requests per second"
+
+    - name: business
+      interval: 30s
+      rules:
+      - alert: WorkflowExecutionFailures
+        expr: |
+          sum(rate(n8n_workflow_execution_failed_total[5m])) by (workflow_id) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          team: content
+        annotations:
+          summary: "Workflow execution failures"
+          description: "Workflow {{ $labels.workflow_id }} has {{ $value }} failures per second"
+
+      - alert: BrandColorViolation
+        expr: |
+          sum(rate(canvator_brand_color_violations_total[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+          team: brand
+        annotations:
+          summary: "Brand color violation detected"
+          description: "Canv-a-tor detected {{ $value }} brand color violations per second"

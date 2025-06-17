@@ -1,0 +1,118 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres-cluster
+  namespace: grayghost-ai
+spec:
+  instances: 3
+  primaryUpdateStrategy: unsupervised
+  
+  postgresql:
+    parameters:
+      max_connections: "200"
+      shared_buffers: "256MB"
+      effective_cache_size: "1GB"
+      maintenance_work_mem: "64MB"
+      checkpoint_completion_target: "0.9"
+      wal_buffers: "16MB"
+      default_statistics_target: "100"
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+      work_mem: "4MB"
+      min_wal_size: "1GB"
+      max_wal_size: "4GB"
+      log_statement: "all"
+      log_duration: "on"
+      
+  bootstrap:
+    initdb:
+      database: n8n
+      owner: n8n
+      secret:
+        name: postgres-credentials
+      dataChecksums: true
+      encoding: UTF8
+      
+  storage:
+    size: 50Gi
+    storageClass: fast-ssd
+    
+  monitoring:
+    enabled: true
+    customQueriesConfigMap:
+      - name: postgres-custom-queries
+        key: queries.yaml
+        
+  backup:
+    enabled: true
+    retentionPolicy: "7d"
+    target: "s3://grayghost-backups/postgres"
+    s3Credentials:
+      accessKeyId:
+        name: s3-credentials
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: s3-credentials
+        key: SECRET_ACCESS_KEY
+    scheduledBackups:
+    - name: daily-backup
+      schedule: "0 2 * * *"
+      backupOwnerReference: self
+      
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "1"
+    limits:
+      memory: "2Gi"
+      cpu: "2"
+      
+  affinity:
+    podAntiAffinityType: required
+    topologyKey: kubernetes.io/hostname
+    
+  nodeMaintenanceWindow:
+    inProgress: false
+    reusePVC: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: grayghost-ai
+type: Opaque
+stringData:
+  username: n8n
+  password: changeme-in-vault  # This will be replaced by Vault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-primary
+  namespace: grayghost-ai
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    cnpg.io/cluster: postgres-cluster
+    role: primary
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-replica
+  namespace: grayghost-ai
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    cnpg.io/cluster: postgres-cluster
+    role: replica

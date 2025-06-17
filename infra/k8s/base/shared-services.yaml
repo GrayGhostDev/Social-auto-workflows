@@ -1,0 +1,354 @@
+# Canv-a-tor Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canv-a-tor
+  namespace: grayghost-ai
+  labels:
+    app: canv-a-tor
+    component: shared-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: canv-a-tor
+  template:
+    metadata:
+      labels:
+        app: canv-a-tor
+        component: shared-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: canv-a-tor
+      containers:
+      - name: canv-a-tor
+        image: grayghost/canv-a-tor:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 50051
+          name: grpc
+        env:
+        # Brand Color Palette - Strictly Enforced
+        - name: BRAND_COLOR_PRIMARY
+          value: "#FF5733"
+        - name: BRAND_COLOR_SECONDARY
+          value: "#33FF57"
+        - name: BRAND_COLOR_ACCENT
+          value: "#3357FF"
+        - name: BRAND_COLOR_DARK
+          value: "#1A1A1A"
+        - name: BRAND_COLOR_LIGHT
+          value: "#FFFFFF"
+        - name: BRAND_COLOR_WARNING
+          value: "#FFC107"
+        - name: BRAND_COLOR_ERROR
+          value: "#DC3545"
+        - name: BRAND_COLOR_SUCCESS
+          value: "#28A745"
+        - name: CANVA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: canva-credentials
+              key: api-key
+        - name: GRPC_PORT
+          value: "50051"
+        - name: HTTP_PORT
+          value: "3000"
+        - name: NODE_ENV
+          value: "production"
+        - name: LOG_LEVEL
+          value: "info"
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canv-a-tor
+  namespace: grayghost-ai
+  labels:
+    app: canv-a-tor
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  - port: 50051
+    targetPort: 50051
+    protocol: TCP
+    name: grpc
+  selector:
+    app: canv-a-tor
+---
+# Trend Miner Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trend-miner
+  namespace: grayghost-ai
+  labels:
+    app: trend-miner
+    component: shared-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: trend-miner
+  template:
+    metadata:
+      labels:
+        app: trend-miner
+        component: shared-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: trend-miner
+      containers:
+      - name: trend-miner
+        image: grayghost/trend-miner:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          name: http
+        - containerPort: 50052
+          name: grpc
+        env:
+        - name: FASTAPI_PORT
+          value: "8000"
+        - name: GRPC_PORT
+          value: "50052"
+        - name: REDIS_HOST
+          value: "redis-cluster"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: CACHE_TTL
+          value: "3600"
+        - name: ML_MODEL_PATH
+          value: "/models"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: WORKERS
+          value: "4"
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+        volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: ml-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trend-miner
+  namespace: grayghost-ai
+  labels:
+    app: trend-miner
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  - port: 50052
+    targetPort: 50052
+    protocol: TCP
+    name: grpc
+  selector:
+    app: trend-miner
+---
+# Brandwatch Receiver
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: brandwatch-receiver
+  namespace: grayghost-ai
+  labels:
+    app: brandwatch-receiver
+    component: shared-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: brandwatch-receiver
+  template:
+    metadata:
+      labels:
+        app: brandwatch-receiver
+        component: shared-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3001"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: brandwatch-receiver
+      containers:
+      - name: brandwatch-receiver
+        image: grayghost/brandwatch-receiver:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3001
+          name: http
+        - containerPort: 50053
+          name: grpc
+        env:
+        - name: HTTP_PORT
+          value: "3001"
+        - name: GRPC_PORT
+          value: "50053"
+        - name: WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: brandwatch-credentials
+              key: webhook-secret
+        - name: REDIS_HOST
+          value: "redis-cluster"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: QUEUE_NAME
+          value: "brandwatch-events"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: MAX_PAYLOAD_SIZE
+          value: "20MB"
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3001
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 3001
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: brandwatch-receiver
+  namespace: grayghost-ai
+  labels:
+    app: brandwatch-receiver
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 3001
+    protocol: TCP
+    name: http
+  - port: 50053
+    targetPort: 50053
+    protocol: TCP
+    name: grpc
+  selector:
+    app: brandwatch-receiver
+---
+# Service Accounts
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: canv-a-tor
+  namespace: grayghost-ai
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: trend-miner
+  namespace: grayghost-ai
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: brandwatch-receiver
+  namespace: grayghost-ai
+---
+# PVC for ML Models
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ml-models
+  namespace: grayghost-ai
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard

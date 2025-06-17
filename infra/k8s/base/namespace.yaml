@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: grayghost-ai
+  labels:
+    app: grayghost-ai
+    environment: base
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: compute-quota
+  namespace: grayghost-ai
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    persistentvolumeclaims: "10"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: pod-limit-range
+  namespace: grayghost-ai
+spec:
+  limits:
+  - default:
+      cpu: "2"
+      memory: 2Gi
+    defaultRequest:
+      cpu: "1"
+      memory: 1Gi
+    max:
+      cpu: "2"
+      memory: 2Gi
+    min:
+      cpu: 100m
+      memory: 128Mi
+    type: Container
