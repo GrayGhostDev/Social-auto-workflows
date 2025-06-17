@@ -1,0 +1,226 @@
+name: SBOM Generation and Compliance
+
+on:
+  push:
+    branches: [main, staging, dev]
+  pull_request:
+    branches: [main, staging, dev]
+  workflow_dispatch:
+
+env:
+  SBOM_FORMAT: cyclonedx
+  SBOM_VERSION: 1.4
+
+jobs:
+  generate-sbom:
+    name: Generate Software Bill of Materials
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      # Generate SBOM for Node.js dependencies
+      - name: Generate Node.js SBOM
+        uses: CycloneDX/gh-node-module-sbom@v1
+        with:
+          output-format: json
+          output-filename: sbom-node.json
+      
+      # Generate SBOM for container images
+      - name: Generate Container SBOM with Syft
+        uses: anchore/syft-action@v1
+        with:
+          image: "n8nio/n8n:latest"
+          format: cyclonedx-json
+          output-file: sbom-container.json
+      
+      # Generate SBOM for Terraform modules
+      - name: Generate Terraform SBOM
+        run: |
+          cd infra/terraform
+          # Install terrascan for SBOM generation
+          curl -L https://github.com/tenable/terrascan/releases/latest/download/terrascan_Linux_x86_64.tar.gz | tar -xz
+          ./terrascan sbom -t aws -f json -o ../../sbom-terraform.json || true
+          cd ../..
+      
+      # Merge all SBOMs
+      - name: Merge SBOMs
+        run: |
+          npm install -g @cyclonedx/cli
+          cyclonedx merge \
+            --input-files sbom-node.json sbom-container.json sbom-terraform.json \
+            --output-file sbom-complete.json \
+            --output-format json
+      
+      # Validate SBOM
+      - name: Validate SBOM
+        run: |
+          cyclonedx validate --input-file sbom-complete.json --spec-version ${{ env.SBOM_VERSION }}
+      
+      # License compliance check
+      - name: License Compliance Check
+        run: |
+          npm install -g license-checker
+          license-checker --production --summary --failOn "GPL;AGPL;LGPL;CDDL;EPL;RPL"
+      
+      # Vulnerability scan on SBOM
+      - name: Scan SBOM for vulnerabilities
+        uses: anchore/scan-action@v3
+        with:
+          sbom: sbom-complete.json
+          fail-build: true
+          severity-cutoff: high
+      
+      # Generate SLSA provenance
+      - name: Generate SLSA Provenance
+        uses: slsa-framework/slsa-github-generator@v1.9.0
+        with:
+          subjects: |
+            sbom-complete.json
+            flows-v${{ github.sha }}.tar.gz
+      
+      # Sign SBOM with Cosign
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+      
+      - name: Sign SBOM
+        run: |
+          cosign sign-blob sbom-complete.json \
+            --output-certificate sbom-complete.json.crt \
+            --output-signature sbom-complete.json.sig \
+            --yes
+      
+      # Calculate SHA-256 checksums
+      - name: Generate checksums
+        run: |
+          sha256sum sbom-*.json > SHA256SUMS
+          sha256sum *.sig *.crt >> SHA256SUMS
+      
+      # Store SBOM artifacts
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-artifacts-${{ github.sha }}
+          path: |
+            sbom-*.json
+            *.sig
+            *.crt
+            SHA256SUMS
+          retention-days: 90
+      
+      # Push to audit vault S3 bucket
+      - name: Archive to Audit Vault
+        if: github.ref == 'refs/heads/main'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-east-1
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%d-%H%M%S")
+          AUDIT_PATH="s3://grayghost-audit-vault/sboms/${TIMESTAMP}/"
+          
+          # Upload with immutable object lock
+          aws s3 cp sbom-complete.json "${AUDIT_PATH}" \
+            --storage-class COMPLIANCE \
+            --server-side-encryption aws:kms \
+            --metadata "git-sha=${{ github.sha }},timestamp=${TIMESTAMP}"
+          
+          aws s3 cp SHA256SUMS "${AUDIT_PATH}"
+          aws s3 cp sbom-complete.json.sig "${AUDIT_PATH}"
+          aws s3 cp sbom-complete.json.crt "${AUDIT_PATH}"
+      
+      # Create GitHub Release with SBOM
+      - name: Create Release with SBOM
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            sbom-complete.json
+            sbom-complete.json.sig
+            SHA256SUMS
+          body: |
+            ## Software Bill of Materials
+            
+            This release includes a complete SBOM in CycloneDX format.
+            
+            ### Verification
+            ```bash
+            # Verify signature
+            cosign verify-blob sbom-complete.json \
+              --signature sbom-complete.json.sig \
+              --certificate sbom-complete.json.crt
+            
+            # Verify checksums
+            sha256sum -c SHA256SUMS
+            ```
+      
+      # OpenSSF Scorecard
+      - name: Run OpenSSF Scorecard
+        uses: ossf/scorecard-action@v2.3.1
+        with:
+          results_file: scorecard-results.json
+          results_format: json
+          publish_results: true
+      
+      - name: Upload Scorecard results
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-results
+          path: scorecard-results.json
+      
+      # Update compliance dashboard
+      - name: Update Compliance Status
+        if: success() && github.ref == 'refs/heads/main'
+        run: |
+          echo "SBOM_GENERATED=true" >> $GITHUB_ENV
+          echo "SBOM_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_ENV
+          echo "SBOM_SHA256=$(sha256sum sbom-complete.json | cut -d' ' -f1)" >> $GITHUB_ENV
+      
+      - name: Create compliance badge
+        if: success()
+        uses: schneegans/dynamic-badges-action@v1.6.0
+        with:
+          auth: ${{ secrets.GIST_SECRET }}
+          gistID: your-gist-id
+          filename: sbom-compliance.json
+          label: SBOM
+          message: Generated
+          color: success
+
+  dependency-check:
+    name: OWASP Dependency Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run OWASP Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'GrayGhost-AI'
+          path: '.'
+          format: 'ALL'
+          args: >
+            --enableRetired
+            --enableExperimental
+      
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: reports/

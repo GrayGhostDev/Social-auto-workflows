@@ -1,0 +1,111 @@
+# HorizontalPodAutoscaler with Queue-based Scaling
+# Addresses gap: Custom metrics scaling on Redis queue length
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: n8n-queue-hpa
+  namespace: grayghost-ai
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: n8n
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  # CPU utilization
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  # Memory utilization
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  # Redis queue length (custom metric)
+  - type: External
+    external:
+      metric:
+        name: redis_queue_length
+        selector:
+          matchLabels:
+            queue_name: "n8n-jobs"
+      target:
+        type: AverageValue
+        averageValue: "30"  # Scale up when avg queue length > 30 per pod
+  # P95 response time
+  - type: External
+    external:
+      metric:
+        name: n8n_workflow_execution_duration_seconds_p95
+        selector:
+          matchLabels:
+            job: "n8n"
+      target:
+        type: Value
+        value: "1.8"  # Scale up when P95 approaches 2s threshold
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 minutes before scaling down
+      policies:
+      - type: Percent
+        value: 50  # Scale down by max 50% at a time
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30  # Scale up quickly for viral spikes
+      policies:
+      - type: Percent
+        value: 100  # Can double the pods
+        periodSeconds: 60
+      - type: Pods
+        value: 5  # Or add 5 pods at a time
+        periodSeconds: 60
+      selectPolicy: Max  # Choose the policy that scales up the most
+---
+# ServiceMonitor for queue metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: redis-queue-metrics
+  namespace: grayghost-ai
+spec:
+  selector:
+    matchLabels:
+      app: redis-cluster
+  endpoints:
+  - port: metrics
+    interval: 15s
+    path: /metrics
+---
+# PrometheusRule for queue length calculation
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: queue-metrics
+  namespace: grayghost-ai
+spec:
+  groups:
+  - name: queue.rules
+    interval: 15s
+    rules:
+    - record: redis_queue_length
+      expr: |
+        redis_list_length{list="bull:n8n-jobs:wait"} +
+        redis_list_length{list="bull:n8n-jobs:active"} +
+        redis_list_length{list="bull:n8n-jobs:delayed"}
+      labels:
+        queue_name: "n8n-jobs"
+    - alert: QueueBacklogHigh
+      expr: redis_queue_length{queue_name="n8n-jobs"} > 100
+      for: 2m
+      labels:
+        severity: warning
+        team: platform
+      annotations:
+        summary: "High queue backlog detected"
+        description: "Redis queue length is {{ $value }}, scaling may be needed"
