@@ -1,0 +1,464 @@
+{
+  "name": "AI Copywriter",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "webhookPath": "copywriter-trigger",
+        "httpMethod": "POST",
+        "authentication": "headerAuth",
+        "headerAuth": {
+          "keyName": "X-Webhook-Secret",
+          "keyValue": "={{ $env.WEBHOOK_SECRET }}"
+        },
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "webhook-trigger",
+      "name": "Content Request Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [450, 300],
+      "webhookId": "copywriter-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate and sanitize input\nconst item = $input.item.json;\n\n// Required fields validation\nconst required = ['topic', 'contentType', 'platform', 'brandGuidelines'];\nfor (const field of required) {\n  if (!item[field]) {\n    throw new Error(`Missing required field: ${field}`);\n  }\n}\n\n// Content type validation\nconst allowedTypes = ['post', 'caption', 'thread', 'article', 'story'];\nif (!allowedTypes.includes(item.contentType)) {\n  throw new Error(`Invalid content type: ${item.contentType}`);\n}\n\n// Platform validation\nconst allowedPlatforms = ['twitter', 'linkedin', 'instagram', 'tiktok', 'youtube'];\nif (!allowedPlatforms.includes(item.platform)) {\n  throw new Error(`Invalid platform: ${item.platform}`);\n}\n\n// PII Check - ensure no personal data in topic\nconst piiPatterns = [\n  /\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b/i, // Email\n  /\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b/, // Phone\n  /\\b\\d{3}-\\d{2}-\\d{4}\\b/, // SSN\n  /\\b(?:\\d{4}[-\\s]?){3}\\d{4}\\b/ // Credit card\n];\n\nfor (const pattern of piiPatterns) {\n  if (pattern.test(item.topic)) {\n    throw new Error('PII detected in topic. Please remove personal information.');\n  }\n}\n\n// Extract brand colors from guidelines\nconst brandColors = item.brandGuidelines.colors || {\n  primary: process.env.BRAND_PRIMARY_COLOR || '#6200EA',\n  secondary: process.env.BRAND_SECONDARY_COLOR || '#03DAC6'\n};\n\n// Character limits by platform\nconst charLimits = {\n  twitter: 280,\n  linkedin: 3000,\n  instagram: 2200,\n  tiktok: 150,\n  youtube: 5000\n};\n\nreturn {\n  topic: item.topic,\n  contentType: item.contentType,\n  platform: item.platform,\n  tone: item.tone || 'professional',\n  keywords: item.keywords || [],\n  brandColors: brandColors,\n  brandVoice: item.brandGuidelines.voice || 'informative and friendly',\n  charLimit: charLimits[item.platform],\n  requestId: `copy-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "validate-sanitize",
+      "name": "Validate & Sanitize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "gpt-4-turbo-preview"
+            },
+            {
+              "name": "messages",
+              "value": "={{ JSON.stringify([{role: 'system', content: `You are an expert social media copywriter. Create ${$json.contentType} content for ${$json.platform} following these guidelines:\\n\\nBrand Voice: ${$json.brandVoice}\\nTone: ${$json.tone}\\nCharacter Limit: ${$json.charLimit}\\nKeywords to include: ${$json.keywords.join(', ')}\\n\\nIMPORTANT:\\n- Stay within character limits\\n- Use appropriate hashtags for the platform\\n- Maintain brand consistency\\n- Create engaging, shareable content\\n- No personal information or PII`}, {role: 'user', content: `Create ${$json.contentType} about: ${$json.topic}`}]) }}"
+            },
+            {
+              "name": "temperature",
+              "value": 0.7
+            },
+            {
+              "name": "max_tokens",
+              "value": 1000
+            }
+          ]
+        }
+      },
+      "id": "openai-generate",
+      "name": "Generate Content (OpenAI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.error }}",
+              "operation": "isEmpty"
+            }
+          ]
+        }
+      },
+      "id": "check-generation",
+      "name": "Check Generation Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.item.json;\nconst input = $node[\"Validate & Sanitize Input\"].json;\n\n// Extract generated content\nconst content = response.choices[0].message.content;\n\n// Platform-specific formatting\nlet formattedContent = content;\n\n// Add platform-specific elements\nswitch(input.platform) {\n  case 'twitter':\n    // Ensure thread formatting if needed\n    if (input.contentType === 'thread') {\n      const tweets = content.split('\\n\\n').filter(t => t.trim());\n      formattedContent = tweets.map((tweet, i) => `${i + 1}/${tweets.length} ${tweet}`).join('\\n\\n');\n    }\n    break;\n    \n  case 'instagram':\n    // Add spacing for readability\n    formattedContent = content.replace(/\\n/g, '\\n\\n');\n    break;\n    \n  case 'linkedin':\n    // Professional formatting\n    if (input.contentType === 'article') {\n      formattedContent = `📝 ${content}`;\n    }\n    break;\n}\n\n// Brand compliance check\nconst brandCompliant = {\n  hasKeywords: input.keywords.every(kw => \n    content.toLowerCase().includes(kw.toLowerCase())\n  ),\n  withinLimit: formattedContent.length <= input.charLimit,\n  appropriate: !content.match(/\\b(competitor1|competitor2|banned-word)\\b/gi)\n};\n\n// Calculate engagement score (mock - would use historical data)\nconst engagementScore = Math.random() * 100;\n\nreturn {\n  requestId: input.requestId,\n  platform: input.platform,\n  contentType: input.contentType,\n  content: formattedContent,\n  charCount: formattedContent.length,\n  charLimit: input.charLimit,\n  brandCompliant: brandCompliant,\n  engagementScore: engagementScore.toFixed(2),\n  hashtags: (formattedContent.match(/#\\w+/g) || []).join(' '),\n  generatedAt: new Date().toISOString(),\n  status: brandCompliant.withinLimit && brandCompliant.appropriate ? 'approved' : 'needs_review'\n};"
+      },
+      "id": "format-validate",
+      "name": "Format & Validate Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_CONTENT_DB_ID }}",
+        "properties": {
+          "values": {
+            "Title": {
+              "title": [
+                {
+                  "text": {
+                    "content": "={{ $json.requestId }}"
+                  }
+                }
+              ]
+            },
+            "Platform": {
+              "select": {
+                "name": "={{ $json.platform }}"
+              }
+            },
+            "Content Type": {
+              "select": {
+                "name": "={{ $json.contentType }}"
+              }
+            },
+            "Content": {
+              "rich_text": [
+                {
+                  "text": {
+                    "content": "={{ $json.content }}"
+                  }
+                }
+              ]
+            },
+            "Status": {
+              "select": {
+                "name": "={{ $json.status }}"
+              }
+            },
+            "Character Count": {
+              "number": "={{ $json.charCount }}"
+            },
+            "Engagement Score": {
+              "number": "={{ parseFloat($json.engagementScore) }}"
+            },
+            "Hashtags": {
+              "rich_text": [
+                {
+                  "text": {
+                    "content": "={{ $json.hashtags }}"
+                  }
+                }
+              ]
+            },
+            "Generated At": {
+              "date": {
+                "start": "={{ $json.generatedAt }}"
+              }
+            },
+            "Brand Compliant": {
+              "checkbox": "={{ $json.brandCompliant.withinLimit && $json.brandCompliant.appropriate }}"
+            }
+          }
+        }
+      },
+      "id": "store-notion",
+      "name": "Store in Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.status }}",
+              "operation": "equals",
+              "value2": "needs_review"
+            }
+          ]
+        }
+      },
+      "id": "check-review",
+      "name": "Needs Review?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1650, 200]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $env.SLACK_CONTENT_REVIEW_CHANNEL }}",
+        "text": ":warning: Content needs review",
+        "attachments": [
+          {
+            "color": "#ff9800",
+            "fields": {
+              "item": [
+                {
+                  "short": true,
+                  "name": "Request ID",
+                  "value": "={{ $json.requestId }}"
+                },
+                {
+                  "short": true,
+                  "name": "Platform",
+                  "value": "={{ $json.platform }}"
+                },
+                {
+                  "short": false,
+                  "name": "Issue",
+                  "value": "={{ !$json.brandCompliant.withinLimit ? 'Exceeds character limit' : 'Failed brand compliance check' }}"
+                },
+                {
+                  "short": false,
+                  "name": "Content Preview",
+                  "value": "={{ $json.content.substring(0, 200) }}..."
+                }
+              ]
+            },
+            "fallback": "Content review needed for {{ $json.requestId }}"
+          }
+        ]
+      },
+      "id": "slack-review",
+      "name": "Send to Slack for Review",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [1850, 100]
+    },
+    {
+      "parameters": {
+        "operation": "push",
+        "options": {
+          "bull": {
+            "removeOnComplete": {
+              "enabled": true,
+              "count": 100
+            },
+            "removeOnFail": {
+              "enabled": true,
+              "count": 50
+            }
+          }
+        },
+        "queueName": "content-publish-queue",
+        "data": "={{ JSON.stringify($json) }}"
+      },
+      "id": "queue-publish",
+      "name": "Queue for Publishing",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Error handling and metrics\nconst error = $input.item.json;\nconst originalInput = $node[\"Validate & Sanitize Input\"].json;\n\n// Log error for monitoring\nconsole.error('Content generation failed:', {\n  requestId: originalInput.requestId,\n  error: error.message || 'Unknown error',\n  platform: originalInput.platform,\n  timestamp: new Date().toISOString()\n});\n\n// Return error response\nreturn {\n  requestId: originalInput.requestId,\n  status: 'failed',\n  error: error.message || 'Content generation failed',\n  timestamp: new Date().toISOString(),\n  retryable: !error.message?.includes('Invalid') && !error.message?.includes('PII')\n};"
+      },
+      "id": "handle-error",
+      "name": "Handle Generation Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 400]
+    },
+    {
+      "parameters": {
+        "resource": "database",
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_ERROR_LOG_DB_ID }}",
+        "properties": {
+          "values": {
+            "Title": {
+              "title": [
+                {
+                  "text": {
+                    "content": "Copywriter Error: {{ $json.requestId }}"
+                  }
+                }
+              ]
+            },
+            "Error": {
+              "rich_text": [
+                {
+                  "text": {
+                    "content": "={{ $json.error }}"
+                  }
+                }
+              ]
+            },
+            "Timestamp": {
+              "date": {
+                "start": "={{ $json.timestamp }}"
+              }
+            },
+            "Retryable": {
+              "checkbox": "={{ $json.retryable }}"
+            },
+            "Workflow": {
+              "select": {
+                "name": "AI Copywriter"
+              }
+            }
+          }
+        }
+      },
+      "id": "log-error",
+      "name": "Log Error to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1450, 400]
+    },
+    {
+      "parameters": {
+        "content": "## AI Copywriter Workflow\n\nThis workflow generates social media content using AI while maintaining brand consistency and compliance.\n\n### Features:\n- Multi-platform content generation (Twitter, LinkedIn, Instagram, TikTok, YouTube)\n- Brand voice and guideline adherence\n- Character limit enforcement\n- PII detection and prevention\n- Content review queue for non-compliant content\n- Automatic publishing queue integration\n\n### Webhook Payload Example:\n```json\n{\n  \"topic\": \"10 tips for remote work productivity\",\n  \"contentType\": \"post\",\n  \"platform\": \"linkedin\",\n  \"tone\": \"professional\",\n  \"keywords\": [\"productivity\", \"remote work\", \"tips\"],\n  \"brandGuidelines\": {\n    \"voice\": \"helpful and authoritative\",\n    \"colors\": {\n      \"primary\": \"#0077B5\",\n      \"secondary\": \"#00A0DC\"\n    }\n  }\n}\n```",
+        "height": 464.5234375,
+        "width": 565.63830280303
+      },
+      "id": "note-workflow",
+      "name": "Workflow Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 580]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Content Request Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate & Sanitize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Sanitize Input": {
+      "main": [
+        [
+          {
+            "node": "Generate Content (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Content (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "Check Generation Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Generation Success": {
+      "main": [
+        [
+          {
+            "node": "Format & Validate Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Generation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format & Validate Content": {
+      "main": [
+        [
+          {
+            "node": "Store in Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in Notion": {
+      "main": [
+        [
+          {
+            "node": "Needs Review?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Review?": {
+      "main": [
+        [
+          {
+            "node": "Send to Slack for Review",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue for Publishing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Generation Error": {
+      "main": [
+        [
+          {
+            "node": "Log Error to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "versionId": "v1.0.0",
+  "id": "ai-copywriter-workflow",
+  "meta": {
+    "instanceId": "n8n-grayghost-ai"
+  },
+  "tags": [
+    {
+      "name": "content-generation",
+      "createdAt": "2024-01-15T12:00:00.000Z"
+    },
+    {
+      "name": "ai",
+      "createdAt": "2024-01-15T12:00:00.000Z"
+    }
+  ]
+}

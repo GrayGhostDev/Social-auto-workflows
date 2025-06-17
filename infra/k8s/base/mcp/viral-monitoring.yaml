@@ -1,0 +1,323 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: viral-metrics-dashboard
+  namespace: mcp
+data:
+  dashboard.json: |
+    {
+      "dashboard": {
+        "title": "Viral Content Optimization Dashboard",
+        "panels": [
+          {
+            "title": "Variant Win Rate",
+            "type": "graph",
+            "targets": [{
+              "expr": "rate(experiment_variant_wins_total[5m]) / rate(experiment_variants_tested_total[5m])",
+              "legendFormat": "Win Rate"
+            }]
+          },
+          {
+            "title": "First-Hour Engagement",
+            "type": "graph",
+            "targets": [{
+              "expr": "histogram_quantile(0.95, rate(first_hour_engagement_rate_bucket[5m]))",
+              "legendFormat": "P95 Engagement"
+            }]
+          },
+          {
+            "title": "Retention Predictions vs Actual",
+            "type": "graph",
+            "targets": [{
+              "expr": "avg(retention_prediction_accuracy)",
+              "legendFormat": "Model Accuracy"
+            }]
+          },
+          {
+            "title": "Viral Score Distribution",
+            "type": "heatmap",
+            "targets": [{
+              "expr": "viral_score_bucket",
+              "format": "heatmap"
+            }]
+          },
+          {
+            "title": "Platform Algorithm Changes",
+            "type": "table",
+            "targets": [{
+              "expr": "algorithm_change_detected",
+              "instant": true
+            }]
+          },
+          {
+            "title": "Unpublish Rate",
+            "type": "stat",
+            "targets": [{
+              "expr": "rate(content_unpublished_total[24h])",
+              "legendFormat": "Daily Unpublish"
+            }]
+          },
+          {
+            "title": "Audio Rights Clearance",
+            "type": "pie",
+            "targets": [{
+              "expr": "sum by (status) (audio_rights_checks_total)",
+              "legendFormat": "{{status}}"
+            }]
+          },
+          {
+            "title": "Cross-Platform Performance",
+            "type": "bar",
+            "targets": [{
+              "expr": "avg by (platform) (content_engagement_rate)",
+              "legendFormat": "{{platform}}"
+            }]
+          }
+        ]
+      }
+    }
+---
+apiVersion: v1
+kind: ServiceMonitor
+metadata:
+  name: viral-agents-metrics
+  namespace: mcp
+  labels:
+    app: mcp-agents
+spec:
+  selector:
+    matchLabels:
+      app: agent-runner
+  endpoints:
+  - port: metrics
+    interval: 15s
+    path: /metrics
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: '(experiment_.*|retention_.*|viral_.*|audio_.*|first_hour_.*)'
+      action: keep
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: viral-content-alerts
+  namespace: mcp
+spec:
+  groups:
+  - name: viral.optimization
+    interval: 30s
+    rules:
+    - alert: LowVariantWinRate
+      expr: |
+        rate(experiment_variant_wins_total[1h]) / rate(experiment_variants_tested_total[1h]) < 0.3
+      for: 30m
+      labels:
+        severity: warning
+        team: content-ops
+      annotations:
+        summary: "A/B test win rate below 30%"
+        description: "Variant win rate is {{ $value | humanizePercentage }} - review experiment strategies"
+    
+    - alert: RetentionPredictionDrift
+      expr: |
+        abs(avg(retention_predicted) - avg(retention_actual)) > 0.15
+      for: 1h
+      labels:
+        severity: warning
+        team: ml-ops
+      annotations:
+        summary: "Retention model drift detected"
+        description: "Model predictions differ from actual by {{ $value | humanizePercentage }}"
+    
+    - alert: HighUnpublishRate
+      expr: |
+        rate(content_unpublished_total[6h]) > 0.1
+      for: 30m
+      labels:
+        severity: critical
+        team: content-ops
+      annotations:
+        summary: "High content unpublish rate"
+        description: "{{ $value | humanizePercentage }} of content unpublished - review quality controls"
+    
+    - alert: AudioRightsClearanceFailure
+      expr: |
+        rate(audio_rights_checks_failed_total[1h]) / rate(audio_rights_checks_total[1h]) > 0.5
+      for: 15m
+      labels:
+        severity: warning
+        team: content-ops
+      annotations:
+        summary: "High audio rights failure rate"
+        description: "{{ $value | humanizePercentage }} of audio checks failing"
+    
+    - alert: FirstHourEngagementLow
+      expr: |
+        histogram_quantile(0.5, rate(first_hour_engagement_rate_bucket[30m])) < 0.03
+      for: 1h
+      labels:
+        severity: warning
+        team: content-ops
+      annotations:
+        summary: "Low first-hour engagement"
+        description: "Median engagement rate is {{ $value | humanizePercentage }} - below 3% threshold"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: engagement-push-config
+  namespace: mcp
+data:
+  slack-template.json: |
+    {
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "🚀 New Content Published! Quick Engagement Needed"
+          }
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": "*{{ .Title }}*\n{{ .Platform }} • {{ .PublishTime }}"
+          }
+        },
+        {
+          "type": "actions",
+          "elements": [
+            {
+              "type": "button",
+              "text": {
+                "type": "plain_text",
+                "text": "👍 Like"
+              },
+              "url": "{{ .LikeUrl }}",
+              "style": "primary"
+            },
+            {
+              "type": "button",
+              "text": {
+                "type": "plain_text",
+                "text": "💬 Comment"
+              },
+              "url": "{{ .CommentUrl }}"
+            },
+            {
+              "type": "button",
+              "text": {
+                "type": "plain_text",
+                "text": "🔄 Share"
+              },
+              "url": "{{ .ShareUrl }}"
+            }
+          ]
+        },
+        {
+          "type": "context",
+          "elements": [
+            {
+              "type": "mrkdwn",
+              "text": "Target CPR: ≥0.05 within 30 min • Current: {{ .CurrentCPR }}"
+            }
+          ]
+        }
+      ]
+    }
+  
+  engagement-targets.yaml: |
+    platforms:
+      tiktok:
+        first_30_min:
+          views: 100
+          likes: 10
+          comments: 5
+          shares: 2
+        first_hour:
+          views: 500
+          engagement_rate: 0.08
+      instagram:
+        first_30_min:
+          views: 50
+          likes: 5
+          comments: 2
+          shares: 1
+        first_hour:
+          views: 200
+          engagement_rate: 0.06
+      youtube:
+        first_30_min:
+          views: 50
+          likes: 3
+          comments: 1
+        first_hour:
+          views: 150
+          engagement_rate: 0.04
+      twitter:
+        first_30_min:
+          impressions: 200
+          likes: 5
+          retweets: 2
+          replies: 1
+        first_hour:
+          impressions: 1000
+          engagement_rate: 0.03
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: engagement-push-controller
+  namespace: mcp
+  labels:
+    app: engagement-push
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: engagement-push
+  template:
+    metadata:
+      labels:
+        app: engagement-push
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: engagement-push
+      containers:
+      - name: controller
+        image: ghcr.io/ggdc/engagement-push:v1
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: SLACK_WEBHOOK_URL
+          valueFrom:
+            secretKeyRef:
+              name: slack-credentials
+              key: webhook_url
+        - name: REDIS_HOST
+          value: "redis-cluster.grayghostai:6379"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/engagement
+          readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: config
+        configMap:
+          name: engagement-push-config
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: engagement-push
+  namespace: mcp

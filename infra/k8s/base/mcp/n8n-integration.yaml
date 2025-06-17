@@ -1,0 +1,300 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: n8n-mcp-webhook-config
+  namespace: grayghostai
+data:
+  webhook-mappings.json: |
+    {
+      "node_mappings": {
+        "HTTP Trend": {
+          "mcp_endpoint": "https://mcp-gateway.mcp:8080/agents/trend-scout",
+          "auth_required": true,
+          "timeout": 30
+        },
+        "GPT Copy": {
+          "mcp_endpoint": "https://mcp-gateway.mcp:8080/agents/hook-crafter",
+          "auth_required": true,
+          "timeout": 60
+        },
+        "Canv-a-tor": {
+          "mcp_endpoint": "https://mcp-gateway.mcp:8080/agents/visual-composer",
+          "auth_required": true,
+          "timeout": 120
+        },
+        "Compliance Gate": {
+          "mcp_endpoints": [
+            "https://mcp-gateway.mcp:8080/agents/brand-sentinel",
+            "https://mcp-gateway.mcp:8080/agents/pii-guardian"
+          ],
+          "auth_required": true,
+          "parallel": true,
+          "timeout": 90
+        }
+      },
+      "authentication": {
+        "type": "jwt",
+        "issuer": "n8n.grayghostai.com",
+        "audience": "mcp-gateway"
+      },
+      "retry_policy": {
+        "max_attempts": 3,
+        "backoff": "exponential",
+        "initial_delay": 1000
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n-mcp-bridge
+  namespace: grayghostai
+  labels:
+    app: n8n-mcp-bridge
+    component: integration
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: n8n-mcp-bridge
+  template:
+    metadata:
+      labels:
+        app: n8n-mcp-bridge
+        component: integration
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8088"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: n8n-mcp-bridge
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+      - name: bridge
+        image: ghcr.io/ggdc/n8n-mcp-bridge:v1
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8088
+          protocol: TCP
+        env:
+        - name: N8N_URL
+          value: "http://n8n:5678"
+        - name: MCP_GATEWAY_URL
+          value: "https://mcp-gateway.mcp:8080"
+        - name: JWT_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: n8n-jwt-keys
+              key: private_key
+        - name: OTEL_SERVICE_NAME
+          value: "n8n-mcp-bridge"
+        - name: OTEL_EXPORTER_JAEGER_ENDPOINT
+          value: "http://jaeger-collector.monitoring:14268/api/traces"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: config
+          mountPath: /etc/bridge
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: n8n-mcp-webhook-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-mcp-bridge
+  namespace: grayghostai
+  labels:
+    app: n8n-mcp-bridge
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 8088
+    targetPort: http
+    protocol: TCP
+  selector:
+    app: n8n-mcp-bridge
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: n8n-mcp-bridge
+  namespace: grayghostai
+  labels:
+    app: n8n-mcp-bridge
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: n8n-mcp-bridge-network-policy
+  namespace: grayghostai
+spec:
+  podSelector:
+    matchLabels:
+      app: n8n-mcp-bridge
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: n8n
+    ports:
+    - protocol: TCP
+      port: 8088
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: mcp
+      podSelector:
+        matchLabels:
+          app: mcp-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  - to:
+    - podSelector:
+        matchLabels:
+          app: n8n
+    ports:
+    - protocol: TCP
+      port: 5678
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+      podSelector:
+        matchLabels:
+          app: jaeger-collector
+    ports:
+    - protocol: TCP
+      port: 14268
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+---
+# Update existing n8n deployment to include bridge webhook
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: n8n-webhook-nodes
+  namespace: grayghostai
+data:
+  custom-nodes.js: |
+    // MCP-enabled webhook node
+    const MCPWebhook = {
+      displayName: 'MCP Agent',
+      name: 'mcpAgent',
+      group: ['transform'],
+      version: 1,
+      description: 'Execute MCP agents',
+      defaults: {
+        name: 'MCP Agent',
+      },
+      inputs: ['main'],
+      outputs: ['main'],
+      properties: [
+        {
+          displayName: 'Agent',
+          name: 'agent',
+          type: 'options',
+          options: [
+            { name: 'Trend Scout', value: 'trend-scout' },
+            { name: 'Audience Cluster', value: 'audience-cluster' },
+            { name: 'Content Strategist', value: 'content-strategist' },
+            { name: 'Hook-Crafter', value: 'hook-crafter' },
+            { name: 'Narrative Storyboard', value: 'narrative-storyboard' },
+            { name: 'Visual-Composer', value: 'visual-composer' },
+            { name: 'Dub-& Caption', value: 'dub-caption' },
+            { name: 'Brand-Sentinel', value: 'brand-sentinel' },
+            { name: 'PII-Guardian', value: 'pii-guardian' },
+            { name: 'Publishing Herald', value: 'publishing-herald' },
+            { name: 'Window-Optimizer', value: 'window-optimizer' },
+            { name: 'Boost-Governor', value: 'boost-governor' },
+            { name: 'Anomaly-Watcher', value: 'anomaly-watcher' },
+            { name: 'Incident-Narrator', value: 'incident-narrator' },
+            { name: 'Analytics Analyst', value: 'analytics-analyst' },
+          ],
+          default: 'trend-scout',
+          required: true,
+        },
+        {
+          displayName: 'Wait for Result',
+          name: 'waitForResult',
+          type: 'boolean',
+          default: true,
+          description: 'Whether to wait for agent completion',
+        },
+      ],
+      async execute() {
+        const agent = this.getNodeParameter('agent', 0);
+        const waitForResult = this.getNodeParameter('waitForResult', 0);
+        const items = this.getInputData();
+        
+        const bridgeUrl = process.env.MCP_BRIDGE_URL || 'http://n8n-mcp-bridge:8088';
+        
+        const results = await Promise.all(
+          items.map(async (item) => {
+            const response = await this.helpers.httpRequest({
+              method: 'POST',
+              url: `${bridgeUrl}/execute`,
+              body: {
+                agent,
+                data: item.json,
+                waitForResult,
+                workflowId: this.getWorkflow().id,
+                executionId: this.getExecutionId(),
+              },
+              headers: {
+                'X-Trace-Id': this.getExecutionId(),
+              },
+            });
+            
+            return {
+              json: response,
+              binary: item.binary,
+            };
+          })
+        );
+        
+        return [results];
+      },
+    };
+    
+    module.exports = { MCPWebhook };

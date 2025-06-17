@@ -1,0 +1,10 @@
+aiohttp==3.9.1
+redis==5.0.1
+notion-client==2.2.0
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-exporter-jaeger==1.21.0
+pydantic==2.5.3
+numpy==1.24.3
+scipy==1.11.4
+uuid==1.30

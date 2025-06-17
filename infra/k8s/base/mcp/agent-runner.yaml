@@ -1,0 +1,506 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-runner-config
+  namespace: mcp
+data:
+  runner.yaml: |
+    server:
+      port: 9000
+      max_concurrent_vms: 10
+    
+    firecracker:
+      kernel_image: "/opt/firecracker/vmlinux"
+      rootfs_image: "/opt/firecracker/rootfs.ext4"
+      cpu_count: 2
+      memory_size_mb: 2048
+      enable_jailer: true
+      jailer_binary: "/usr/bin/jailer"
+      chroot_base: "/srv/jailer"
+    
+    security:
+      cosign_verify: true
+      cosign_key: "/etc/cosign/cosign.pub"
+      allowed_registries:
+        - "ghcr.io/ggdc/agents"
+      image_pull_timeout: 300s
+    
+    agent_config:
+      default_timeout: 300s
+      max_retries: 3
+      retry_backoff: "exponential"
+    
+    telemetry:
+      enabled: true
+      otel_endpoint: "http://otel-collector.monitoring:4317"
+      metrics_interval: 15s
+    
+    redis:
+      address: "redis-cluster.grayghostai:6379"
+      stream_key: "mcp:events"
+      consumer_group: "agent-runners"
+      block_timeout: 5s
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runner-cpu
+  namespace: mcp
+  labels:
+    app: agent-runner
+    compute-type: cpu
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: agent-runner
+      compute-type: cpu
+  template:
+    metadata:
+      labels:
+        app: agent-runner
+        compute-type: cpu
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9000"
+        prometheus.io/path: "/metrics"
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "mcp-agent-runner"
+        vault.hashicorp.com/agent-inject-secret-openai: "secret/data/mcp/openai_key"
+        vault.hashicorp.com/agent-inject-secret-canva: "secret/data/mcp/canva_key"
+    spec:
+      serviceAccountName: agent-runner
+      nodeSelector:
+        node.kubernetes.io/instance-type: "m5.2xlarge"
+      securityContext:
+        runAsUser: 0  # Required for Firecracker
+        fsGroup: 0
+      containers:
+      - name: runner
+        image: ghcr.io/ggdc/runner:v1
+        imagePullPolicy: Always
+        ports:
+        - name: grpc
+          containerPort: 9000
+          protocol: TCP
+        - name: metrics
+          containerPort: 2112
+          protocol: TCP
+        env:
+        - name: RUNNER_TYPE
+          value: "cpu"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: password
+        - name: OTEL_SERVICE_NAME
+          value: "agent-runner-cpu"
+        - name: LOG_LEVEL
+          value: "INFO"
+        resources:
+          requests:
+            cpu: 2
+            memory: 4Gi
+          limits:
+            cpu: 8
+            memory: 16Gi
+        volumeMounts:
+        - name: config
+          mountPath: /etc/runner
+          readOnly: true
+        - name: firecracker-socket
+          mountPath: /var/run/firecracker
+        - name: cosign-keys
+          mountPath: /etc/cosign
+          readOnly: true
+        - name: tmpfs
+          mountPath: /tmp
+        - name: dev-kvm
+          mountPath: /dev/kvm
+        readinessProbe:
+          exec:
+            command:
+            - /bin/grpc_health_probe
+            - -addr=:9000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - /bin/grpc_health_probe
+            - -addr=:9000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        securityContext:
+          privileged: true  # Required for Firecracker
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - NET_ADMIN
+      volumes:
+      - name: config
+        configMap:
+          name: agent-runner-config
+      - name: firecracker-socket
+        emptyDir: {}
+      - name: cosign-keys
+        secret:
+          secretName: cosign-public-keys
+      - name: tmpfs
+        emptyDir:
+          medium: Memory
+          sizeLimit: 8Gi
+      - name: dev-kvm
+        hostPath:
+          path: /dev/kvm
+          type: CharDevice
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runner-gpu
+  namespace: mcp
+  labels:
+    app: agent-runner
+    compute-type: gpu
+spec:
+  replicas: 0  # Scaled by HPA based on GPU utilization
+  selector:
+    matchLabels:
+      app: agent-runner
+      compute-type: gpu
+  template:
+    metadata:
+      labels:
+        app: agent-runner
+        compute-type: gpu
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9000"
+        prometheus.io/path: "/metrics"
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "mcp-agent-runner"
+        vault.hashicorp.com/agent-inject-secret-openai: "secret/data/mcp/openai_key"
+        vault.hashicorp.com/agent-inject-secret-canva: "secret/data/mcp/canva_key"
+    spec:
+      serviceAccountName: agent-runner
+      nodeSelector:
+        node.kubernetes.io/instance-type: "p3.2xlarge"
+        nvidia.com/gpu: "true"
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      securityContext:
+        runAsUser: 0  # Required for Firecracker
+        fsGroup: 0
+      containers:
+      - name: runner
+        image: ghcr.io/ggdc/runner:v1
+        imagePullPolicy: Always
+        ports:
+        - name: grpc
+          containerPort: 9000
+          protocol: TCP
+        - name: metrics
+          containerPort: 2112
+          protocol: TCP
+        env:
+        - name: RUNNER_TYPE
+          value: "gpu"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-credentials
+              key: password
+        - name: OTEL_SERVICE_NAME
+          value: "agent-runner-gpu"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "compute,utility"
+        resources:
+          requests:
+            cpu: 4
+            memory: 16Gi
+            nvidia.com/gpu: 1
+          limits:
+            cpu: 8
+            memory: 32Gi
+            nvidia.com/gpu: 1
+        volumeMounts:
+        - name: config
+          mountPath: /etc/runner
+          readOnly: true
+        - name: firecracker-socket
+          mountPath: /var/run/firecracker
+        - name: cosign-keys
+          mountPath: /etc/cosign
+          readOnly: true
+        - name: tmpfs
+          mountPath: /tmp
+        - name: dev-kvm
+          mountPath: /dev/kvm
+        readinessProbe:
+          exec:
+            command:
+            - /bin/grpc_health_probe
+            - -addr=:9000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - /bin/grpc_health_probe
+            - -addr=:9000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        securityContext:
+          privileged: true  # Required for Firecracker and GPU access
+          capabilities:
+            add:
+            - SYS_ADMIN
+            - NET_ADMIN
+      volumes:
+      - name: config
+        configMap:
+          name: agent-runner-config
+      - name: firecracker-socket
+        emptyDir: {}
+      - name: cosign-keys
+        secret:
+          secretName: cosign-public-keys
+      - name: tmpfs
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Gi
+      - name: dev-kvm
+        hostPath:
+          path: /dev/kvm
+          type: CharDevice
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-runner
+  namespace: mcp
+  labels:
+    app: agent-runner
+spec:
+  type: ClusterIP
+  ports:
+  - name: grpc
+    port: 9000
+    targetPort: grpc
+    protocol: TCP
+  selector:
+    app: agent-runner
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-runner-cpu
+  namespace: mcp
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-runner-cpu
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: External
+    external:
+      metric:
+        name: redis_stream_length
+        selector:
+          matchLabels:
+            stream: "mcp:events"
+      target:
+        type: Value
+        value: "100"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+      - type: Pods
+        value: 3
+        periodSeconds: 30
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-runner-gpu
+  namespace: mcp
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: agent-runner-gpu
+  minReplicas: 0
+  maxReplicas: 4
+  metrics:
+  - type: External
+    external:
+      metric:
+        name: nvidia_gpu_utilization
+        selector:
+          matchLabels:
+            node_type: "gpu"
+      target:
+        type: Utilization
+        averageUtilization: 65
+  - type: External
+    external:
+      metric:
+        name: gpu_queue_length
+        selector:
+          matchLabels:
+            agents: "visual-composer,dub-caption,pii-guardian"
+      target:
+        type: Value
+        value: "5"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600  # 10 minutes for GPU nodes
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 60
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-runner
+  namespace: mcp
+  labels:
+    app: agent-runner
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: agent-runner
+  namespace: mcp
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agent-runner
+  namespace: mcp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: agent-runner
+subjects:
+- kind: ServiceAccount
+  name: agent-runner
+  namespace: mcp
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-runner-network-policy
+  namespace: mcp
+spec:
+  podSelector:
+    matchLabels:
+      app: agent-runner
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: mcp-gateway
+    ports:
+    - protocol: TCP
+      port: 9000
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: grayghostai
+      podSelector:
+        matchLabels:
+          app: redis-cluster
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - podSelector:
+        matchLabels:
+          app: agent-registry
+    ports:
+    - protocol: TCP
+      port: 7000
+  - to:
+    - podSelector:
+        matchLabels:
+          app: vector-store
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 4317  # OTEL collector
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: vault
+    ports:
+    - protocol: TCP
+      port: 8200
+  # External API access for agents
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+    ports:
+    - protocol: TCP
+      port: 443

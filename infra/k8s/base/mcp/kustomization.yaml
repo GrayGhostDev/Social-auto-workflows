@@ -1,0 +1,60 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mcp
+
+resources:
+  - namespace.yaml
+  - mcp-gateway.yaml
+  - agent-registry.yaml
+  - agent-runner.yaml
+  - vector-store.yaml
+  - state-machine.yaml
+  - security-policies.yaml
+  - n8n-integration.yaml
+
+configMapGenerator:
+  - name: mcp-version
+    literals:
+      - version=1.0.0
+      - build_time=2024-01-17T10:00:00Z
+
+secretGenerator:
+  - name: redis-credentials
+    namespace: mcp
+    literals:
+      - password=PLACEHOLDER_REDIS_PASSWORD
+
+commonLabels:
+  app.kubernetes.io/part-of: mcp
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  - name: ghcr.io/ggdc/mcp-gw
+    newTag: v1
+  - name: ghcr.io/ggdc/registry
+    newTag: v1
+  - name: ghcr.io/ggdc/runner
+    newTag: v1
+  - name: ghcr.io/ggdc/state-controller
+    newTag: v1
+  - name: ghcr.io/ggdc/n8n-mcp-bridge
+    newTag: v1
+
+patchesStrategicMerge:
+  - |-
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: mcp-gateway
+      namespace: mcp
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/mcp-gateway-role
+  - |-
+    apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: agent-runner
+      namespace: mcp
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/mcp-agent-runner-role

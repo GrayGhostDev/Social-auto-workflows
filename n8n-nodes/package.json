@@ -1,0 +1,69 @@
+{
+  "name": "@grayghostai/n8n-nodes-grayghostai",
+  "version": "1.0.0",
+  "description": "n8n nodes for GrayGhostAI content automation agents",
+  "keywords": [
+    "n8n",
+    "n8n-node",
+    "ai",
+    "content",
+    "automation",
+    "social-media"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "GrayGhost Data Consultants",
+    "email": "support@grayghostai.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ggdc/n8n-nodes-grayghostai"
+  },
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc && cp -r icons dist/",
+    "dev": "tsc --watch",
+    "lint": "eslint nodes credentials --ext .ts",
+    "lint:fix": "eslint nodes credentials --ext .ts --fix",
+    "prepublishOnly": "npm run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/TrendScoutApi.credentials.js",
+      "dist/credentials/ExperimentManagerApi.credentials.js",
+      "dist/credentials/TrendingAudioApi.credentials.js",
+      "dist/credentials/RetentionPredictorApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/TrendScout/TrendScout.node.js",
+      "dist/nodes/TrendScout/TrendScoutTrigger.node.js",
+      "dist/nodes/ExperimentManager/ExperimentManager.node.js",
+      "dist/nodes/ExperimentManager/ExperimentManagerTrigger.node.js",
+      "dist/nodes/TrendingAudio/TrendingAudio.node.js",
+      "dist/nodes/RetentionPredictor/RetentionPredictor.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^18.11.9",
+    "@typescript-eslint/eslint-plugin": "^5.45.0",
+    "@typescript-eslint/parser": "^5.45.0",
+    "eslint": "^8.28.0",
+    "eslint-config-prettier": "^8.5.0",
+    "eslint-plugin-n8n-nodes-base": "^1.11.0",
+    "eslint-plugin-prettier": "^4.2.1",
+    "prettier": "^2.8.0",
+    "typescript": "^4.9.3"
+  },
+  "dependencies": {
+    "n8n-core": "^1.19.0",
+    "n8n-workflow": "^1.19.0"
+  },
+  "engines": {
+    "node": ">=18.10",
+    "pnpm": ">=8.6"
+  }
+}

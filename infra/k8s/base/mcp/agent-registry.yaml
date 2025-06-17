@@ -1,0 +1,707 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-manifests
+  namespace: mcp
+data:
+  trend-scout.yaml: |
+    id: trend-scout
+    name: "Trend Scout"
+    version: "1.0.0"
+    description: "Ingests RSS feeds, Twitter/X, and Google Trends to generate 5-line briefs"
+    image: "ghcr.io/ggdc/agents/trend-scout:v1"
+    resources:
+      cpu: "500m"
+      memory: "1Gi"
+    capabilities:
+      - "rss-ingest"
+      - "twitter-api"
+      - "google-trends"
+    limits:
+      api_quota: 1000
+      ttl_hours: 24
+    inputs:
+      - name: "sources"
+        type: "array"
+        required: true
+      - name: "keywords"
+        type: "array"
+        required: false
+    outputs:
+      - name: "brief"
+        type: "object"
+        schema: "trend-brief-v1"
+  
+  audience-cluster.yaml: |
+    id: audience-cluster
+    name: "Audience Cluster"
+    version: "1.0.0"
+    description: "K-means clustering and LMS stats for audience segmentation"
+    image: "ghcr.io/ggdc/agents/audience-cluster:v1"
+    resources:
+      cpu: "1"
+      memory: "2Gi"
+    capabilities:
+      - "ml-clustering"
+      - "stats-analysis"
+    privacy:
+      sha256_pseudonymization: true
+      nist_800_122_compliant: true
+    inputs:
+      - name: "audience_data"
+        type: "array"
+        required: true
+    outputs:
+      - name: "clusters"
+        type: "object"
+        schema: "audience-segments-v1"
+  
+  content-strategist.yaml: |
+    id: content-strategist
+    name: "Content Strategist"
+    version: "1.0.0"
+    description: "Applies Detroit-local angle and brand pillars to content"
+    image: "ghcr.io/ggdc/agents/content-strategist:v1"
+    resources:
+      cpu: "500m"
+      memory: "1Gi"
+    dependencies:
+      - "trend-scout"
+    capabilities:
+      - "local-context"
+      - "brand-alignment"
+    config:
+      brand_pillars:
+        - "innovation"
+        - "community"
+        - "sustainability"
+      geo_focus: "detroit-metro"
+    inputs:
+      - name: "trend_brief"
+        type: "object"
+        required: true
+    outputs:
+      - name: "strategy"
+        type: "object"
+        schema: "content-strategy-v1"
+  
+  hook-crafter.yaml: |
+    id: hook-crafter
+    name: "Hook-Crafter"
+    version: "1.0.0"
+    description: "Creates 3 hooks + CTA ≤ 55 chars for LinkedIn"
+    image: "ghcr.io/ggdc/agents/hook-crafter:v1"
+    resources:
+      cpu: "500m"
+      memory: "1Gi"
+    capabilities:
+      - "copywriting"
+      - "grammarly-integration"
+    validation:
+      max_chars: 55
+      grammarly_alerts_threshold: 3
+    inputs:
+      - name: "strategy"
+        type: "object"
+        required: true
+    outputs:
+      - name: "hooks"
+        type: "array"
+        schema: "content-hooks-v1"
+  
+  narrative-storyboard.yaml: |
+    id: narrative-storyboard
+    name: "Narrative Storyboard"
+    version: "1.0.0"
+    description: "Creates 15/30/60s scripts with shot-lists"
+    image: "ghcr.io/ggdc/agents/narrative-storyboard:v1"
+    resources:
+      cpu: "1"
+      memory: "2Gi"
+    capabilities:
+      - "script-generation"
+      - "shot-planning"
+    limits:
+      token_cap: 2000
+      pii_regex_block: true
+    inputs:
+      - name: "hooks"
+        type: "array"
+        required: true
+    outputs:
+      - name: "storyboard"
+        type: "object"
+        schema: "video-storyboard-v1"
+  
+  visual-composer.yaml: |
+    id: visual-composer
+    name: "Visual-Composer"
+    version: "1.0.0"
+    description: "Generates visuals using Canva template cv-sh-rob-std-001"
+    image: "ghcr.io/ggdc/agents/visual-composer:v1"
+    resources:
+      cpu: "2"
+      memory: "4Gi"
+      gpu: "1"
+    capabilities:
+      - "canva-api"
+      - "image-generation"
+    brand_guard:
+      hex_palette:
+        - "#FF5733"
+        - "#33FF57"
+        - "#3357FF"
+      template_id: "cv-sh-rob-std-001"
+    inputs:
+      - name: "storyboard"
+        type: "object"
+        required: true
+    outputs:
+      - name: "assets"
+        type: "array"
+        schema: "visual-assets-v1"
+  
+  dub-caption.yaml: |
+    id: dub-caption
+    name: "Dub-& Caption"
+    version: "1.0.0"
+    description: "Whisper captions, Polly VO, VTT/SRT generation"
+    image: "ghcr.io/ggdc/agents/dub-caption:v1"
+    resources:
+      cpu: "2"
+      memory: "4Gi"
+      gpu: "1"
+    capabilities:
+      - "whisper-transcription"
+      - "aws-polly"
+      - "caption-generation"
+    accessibility:
+      wcag_2_2_aa: true
+      contrast_check: true
+    inputs:
+      - name: "video_url"
+        type: "string"
+        required: true
+    outputs:
+      - name: "captioned_video"
+        type: "object"
+        schema: "accessible-video-v1"
+  
+  brand-sentinel.yaml: |
+    id: brand-sentinel
+    name: "Brand-Sentinel"
+    version: "1.0.0"
+    description: "QA bot for pixel-diff logos, font lint, ® checks"
+    image: "ghcr.io/ggdc/agents/brand-sentinel:v1"
+    resources:
+      cpu: "1"
+      memory: "2Gi"
+    capabilities:
+      - "pixel-diff"
+      - "font-validation"
+      - "trademark-check"
+    validation_rules:
+      fail_non_palette: true
+      logo_threshold: 0.95
+    inputs:
+      - name: "assets"
+        type: "array"
+        required: true
+    outputs:
+      - name: "qa_report"
+        type: "object"
+        schema: "brand-qa-v1"
+  
+  pii-guardian.yaml: |
+    id: pii-guardian
+    name: "PII-Guardian"
+    version: "1.0.0"
+    description: "Classifies Low/Mod/High PII and encrypts High-risk data"
+    image: "ghcr.io/ggdc/agents/pii-guardian:v1"
+    resources:
+      cpu: "1"
+      memory: "2Gi"
+      gpu: "1"
+    capabilities:
+      - "pii-classification"
+      - "encryption"
+    compliance:
+      cio_2180_2_tier2: true
+      s3_sse_kms: true
+      legal_review_path: "/legal/review"
+    inputs:
+      - name: "content"
+        type: "object"
+        required: true
+    outputs:
+      - name: "classified_content"
+        type: "object"
+        schema: "pii-classified-v1"
+  
+  publishing-herald.yaml: |
+    id: publishing-herald
+    name: "Publishing Herald"
+    version: "1.1.0"
+    description: "Multi-platform publisher with alt-text injection and jitter"
+    image: "ghcr.io/ggdc/agents/publishing-herald:v1"
+    resources:
+      cpu: "1"
+      memory: "2Gi"
+    capabilities:
+      - "tiktok-api"
+      - "instagram-api"
+      - "youtube-api"
+      - "twitter-api"
+      - "cross-platform-jitter"
+      - "alt-text-generation"
+    rate_limits:
+      tiktok: 10
+      instagram: 20
+      youtube: 5
+      twitter: 50
+    jitter_config:
+      min_offset_minutes: 5
+      max_offset_minutes: 10
+      platform_order:
+        - "tiktok"  # Usually first for trend capture
+        - "instagram"
+        - "youtube"
+        - "twitter"
+    inputs:
+      - name: "content"
+        type: "object"
+        required: true
+      - name: "schedule"
+        type: "object"
+        required: false
+      - name: "enable_jitter"
+        type: "boolean"
+        required: false
+        default: true
+    outputs:
+      - name: "publish_results"
+        type: "object"
+        schema: "publish-status-v1"
+  
+  window-optimizer.yaml: |
+    id: window-optimizer
+    name: "Window-Optimizer"
+    version: "1.0.0"
+    description: "ML-based optimal posting time by locale"
+    image: "ghcr.io/ggdc/agents/window-optimizer:v1"
+    resources:
+      cpu: "1"
+      memory: "2Gi"
+    capabilities:
+      - "ml-prediction"
+      - "bigquery-integration"
+    learning:
+      model: "online"
+      update_frequency: "hourly"
+    inputs:
+      - name: "content"
+        type: "object"
+        required: true
+      - name: "target_locale"
+        type: "string"
+        required: true
+    outputs:
+      - name: "optimal_schedule"
+        type: "object"
+        schema: "posting-schedule-v1"
+  
+  boost-governor.yaml: |
+    id: boost-governor
+    name: "Boost-Governor"
+    version: "1.0.0"
+    description: "CPA-based ad campaign management"
+    image: "ghcr.io/ggdc/agents/boost-governor:v1"
+    resources:
+      cpu: "500m"
+      memory: "1Gi"
+    capabilities:
+      - "meta-ads-api"
+      - "tiktok-ads-api"
+      - "spend-tracking"
+    financial:
+      log_to_finops: true
+      budget_alert_threshold: 0.8
+    inputs:
+      - name: "campaign_params"
+        type: "object"
+        required: true
+    outputs:
+      - name: "campaign_status"
+        type: "object"
+        schema: "ad-campaign-v1"
+  
+  anomaly-watcher.yaml: |
+    id: anomaly-watcher
+    name: "Anomaly-Watcher"
+    version: "1.0.0"
+    description: "Monitors Grafana/Loki for ER and 5xx spikes"
+    image: "ghcr.io/ggdc/agents/anomaly-watcher:v1"
+    resources:
+      cpu: "200m"
+      memory: "512Mi"
+    capabilities:
+      - "prometheus-query"
+      - "loki-query"
+      - "pagerduty-integration"
+    alerting:
+      dedup_window: 300
+      stack_trace_attach: true
+    inputs:
+      - name: "monitoring_config"
+        type: "object"
+        required: false
+    outputs:
+      - name: "anomalies"
+        type: "array"
+        schema: "anomaly-report-v1"
+  
+  incident-narrator.yaml: |
+    id: incident-narrator
+    name: "Incident-Narrator"
+    version: "1.0.0"
+    description: "Drafts US-CERT and post-mortem documentation"
+    image: "ghcr.io/ggdc/agents/incident-narrator:v1"
+    resources:
+      cpu: "500m"
+      memory: "1Gi"
+    capabilities:
+      - "template-generation"
+      - "sentry-integration"
+    templates:
+      us_cert: "/templates/us-cert-incident.md"
+      postmortem: "/templates/postmortem.md"
+    trigger:
+      sentry_tag: "privacy_class=High"
+    inputs:
+      - name: "incident_data"
+        type: "object"
+        required: true
+    outputs:
+      - name: "documentation"
+        type: "object"
+        schema: "incident-docs-v1"
+  
+  analytics-analyst.yaml: |
+    id: analytics-analyst
+    name: "Analytics Analyst"
+    version: "1.0.0"
+    description: "24h KPI extraction to BigQuery/Looker"
+    image: "ghcr.io/ggdc/agents/analytics-analyst:v1"
+    resources:
+      cpu: "1"
+      memory: "2Gi"
+    capabilities:
+      - "bigquery-write"
+      - "looker-api"
+    schedule:
+      cron: "0 2 * * *"
+      dataset: "social.metrics"
+    inputs:
+      - name: "date_range"
+        type: "object"
+        required: false
+    outputs:
+      - name: "kpi_report"
+        type: "object"
+        schema: "analytics-kpi-v1"
+  
+  experiment-manager.yaml: |
+    id: experiment-manager
+    name: "Experiment-Manager"
+    version: "1.0.0"
+    description: "A/B testing and variant optimization for content"
+    image: "ghcr.io/ggdc/agents/experiment-manager:v1"
+    resources:
+      cpu: "500m"
+      memory: "1Gi"
+    capabilities:
+      - "variant-generation"
+      - "statistical-analysis"
+      - "notion-integration"
+    inputs:
+      - name: "content_data"
+        type: "object"
+        required: true
+      - name: "variant_count"
+        type: "integer"
+        required: false
+        default: 3
+    outputs:
+      - name: "experiment"
+        type: "object"
+        schema: "experiment-v1"
+  
+  trending-audio.yaml: |
+    id: trending-audio
+    name: "Trending-Audio"
+    version: "1.0.0"
+    description: "Identifies trending audio and verifies commercial rights"
+    image: "ghcr.io/ggdc/agents/trending-audio:v1"
+    resources:
+      cpu: "500m"
+      memory: "1Gi"
+    capabilities:
+      - "platform-scraping"
+      - "rights-verification"
+      - "audio-matching"
+    apis:
+      - "tiktok"
+      - "youtube-content-id"
+      - "lickd"
+      - "epidemic-sound"
+    inputs:
+      - name: "platform"
+        type: "string"
+        required: false
+        default: "tiktok"
+      - name: "content_context"
+        type: "object"
+        required: false
+    outputs:
+      - name: "audio_recommendation"
+        type: "object"
+        schema: "audio-recommendation-v1"
+  
+  retention-predictor.yaml: |
+    id: retention-predictor
+    name: "Retention-Predictor"
+    version: "1.0.0"
+    description: "ML-based prediction of video completion rates"
+    image: "ghcr.io/ggdc/agents/retention-predictor:v1"
+    resources:
+      cpu: "1"
+      memory: "2Gi"
+      gpu: "1"
+    capabilities:
+      - "ml-prediction"
+      - "gradient-boosting"
+      - "feature-extraction"
+    model:
+      type: "gradient-boost"
+      version: "1.0.0"
+      update_frequency: "weekly"
+    inputs:
+      - name: "metadata"
+        type: "object"
+        required: true
+        schema: "video-metadata-v1"
+    outputs:
+      - name: "prediction"
+        type: "object"
+        schema: "retention-prediction-v1"
+  
+  ugc-harvester.yaml: |
+    id: ugc-harvester
+    name: "UGC-Harvester"
+    version: "1.0.0"
+    description: "Discovers and curates user-generated content"
+    image: "ghcr.io/ggdc/agents/ugc-harvester:v1"
+    resources:
+      cpu: "500m"
+      memory: "1Gi"
+    capabilities:
+      - "content-discovery"
+      - "sentiment-analysis"
+      - "creator-outreach"
+    schedule:
+      trigger: "24h-post-publish"
+    inputs:
+      - name: "original_content_id"
+        type: "string"
+        required: true
+      - name: "hashtags"
+        type: "array"
+        required: true
+    outputs:
+      - name: "ugc_collection"
+        type: "object"
+        schema: "ugc-collection-v1"
+  
+  comment-responder.yaml: |
+    id: comment-responder
+    name: "Comment-Responder"
+    version: "1.0.0"
+    description: "Creates response videos for high-engagement comments"
+    image: "ghcr.io/ggdc/agents/comment-responder:v1"
+    resources:
+      cpu: "1"
+      memory: "2Gi"
+    capabilities:
+      - "comment-analysis"
+      - "response-generation"
+      - "thread-creation"
+    trigger:
+      type: "scheduled"
+      interval: "2h-post-publish"
+    inputs:
+      - name: "parent_content_id"
+        type: "string"
+        required: true
+      - name: "platform"
+        type: "string"
+        required: true
+    outputs:
+      - name: "response_video"
+        type: "object"
+        schema: "response-content-v1"
+  
+  algo-radar.yaml: |
+    id: algo-radar
+    name: "Algo-Radar"
+    version: "1.0.0"
+    description: "Monitors platform algorithm changes"
+    image: "ghcr.io/ggdc/agents/algo-radar:v1"
+    resources:
+      cpu: "200m"
+      memory: "512Mi"
+    capabilities:
+      - "changelog-monitoring"
+      - "pattern-detection"
+      - "impact-analysis"
+    sources:
+      - "platform-developer-blogs"
+      - "creator-economy-news"
+      - "algorithm-research"
+    schedule:
+      cron: "0 6 * * *"  # Daily at 6 AM
+    outputs:
+      - name: "algorithm_updates"
+        type: "object"
+        schema: "algo-changes-v1"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-registry
+  namespace: mcp
+  labels:
+    app: agent-registry
+    component: registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent-registry
+  template:
+    metadata:
+      labels:
+        app: agent-registry
+        component: registry
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "7000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: agent-registry
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+      - name: registry
+        image: ghcr.io/ggdc/registry:v1
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 7000
+          protocol: TCP
+        env:
+        - name: MANIFEST_PATH
+          value: "/etc/agent-manifests"
+        - name: LOG_LEVEL
+          value: "INFO"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: agent-manifests
+          mountPath: /etc/agent-manifests
+          readOnly: true
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: http
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: agent-manifests
+        configMap:
+          name: agent-manifests
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-registry
+  namespace: mcp
+  labels:
+    app: agent-registry
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 7000
+    targetPort: http
+    protocol: TCP
+  selector:
+    app: agent-registry
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-registry
+  namespace: mcp
+  labels:
+    app: agent-registry
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-registry-network-policy
+  namespace: mcp
+spec:
+  podSelector:
+    matchLabels:
+      app: agent-registry
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: agent-runner
+    - podSelector:
+        matchLabels:
+          app: mcp-gateway
+    ports:
+    - protocol: TCP
+      port: 7000
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53

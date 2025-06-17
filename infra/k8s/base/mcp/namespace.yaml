@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp
+  labels:
+    name: mcp
+    environment: production
+    compliance: tier-2
+    security.grayghostai.com/pii-processing: "enabled"
+  annotations:
+    description: "Mission Control Plane for multi-agent content automation"
+    owner: "platform-team"
+    cost-center: "engineering"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: mcp-quota
+  namespace: mcp
+spec:
+  hard:
+    requests.cpu: "100"
+    requests.memory: "200Gi"
+    requests.storage: "1Ti"
+    requests.nvidia.com/gpu: "4"
+    persistentvolumeclaims: "20"
+    services.loadbalancers: "2"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: mcp-limits
+  namespace: mcp
+spec:
+  limits:
+  - max:
+      cpu: "16"
+      memory: "32Gi"
+      nvidia.com/gpu: "1"
+    min:
+      cpu: "100m"
+      memory: "128Mi"
+    default:
+      cpu: "500m"
+      memory: "1Gi"
+    defaultRequest:
+      cpu: "200m"
+      memory: "512Mi"
+    type: Container
+  - max:
+      storage: "100Gi"
+    type: PersistentVolumeClaim
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: mcp
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: vault
+    ports:
+    - protocol: TCP
+      port: 8200

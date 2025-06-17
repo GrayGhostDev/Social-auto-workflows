@@ -1,0 +1,362 @@
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: mcp-restricted
+  namespace: mcp
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/allowedProfileNames: 'runtime/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/defaultProfileName: 'runtime/default'
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+  - ALL
+  volumes:
+  - 'configMap'
+  - 'emptyDir'
+  - 'projected'
+  - 'secret'
+  - 'downwardAPI'
+  - 'persistentVolumeClaim'
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  seLinux:
+    rule: 'RunAsAny'
+  supplementalGroups:
+    rule: 'RunAsAny'
+  fsGroup:
+    rule: 'RunAsAny'
+  readOnlyRootFilesystem: true
+---
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: mcp-firecracker
+  namespace: mcp
+  annotations:
+    description: "PSP for agent-runner pods that need Firecracker privileges"
+spec:
+  privileged: true  # Required for Firecracker
+  allowPrivilegeEscalation: true
+  allowedCapabilities:
+  - SYS_ADMIN
+  - NET_ADMIN
+  requiredDropCapabilities:
+  - SETPCAP
+  - MKNOD
+  - AUDIT_WRITE
+  - CHOWN
+  - NET_RAW
+  - DAC_OVERRIDE
+  - FOWNER
+  - FSETID
+  - KILL
+  - SETGID
+  - SETUID
+  - NET_BIND_SERVICE
+  - SYS_CHROOT
+  - SETFCAP
+  volumes:
+  - 'configMap'
+  - 'emptyDir'
+  - 'projected'
+  - 'secret'
+  - 'downwardAPI'
+  - 'persistentVolumeClaim'
+  - 'hostPath'
+  allowedHostPaths:
+  - pathPrefix: "/dev/kvm"
+    readOnly: false
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: 'RunAsAny'
+  seLinux:
+    rule: 'RunAsAny'
+  supplementalGroups:
+    rule: 'RunAsAny'
+  fsGroup:
+    rule: 'RunAsAny'
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-restricted-psp-user
+rules:
+- apiGroups: ['policy']
+  resources: ['podsecuritypolicies']
+  verbs: ['use']
+  resourceNames:
+  - mcp-restricted
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-firecracker-psp-user
+rules:
+- apiGroups: ['policy']
+  resources: ['podsecuritypolicies']
+  verbs: ['use']
+  resourceNames:
+  - mcp-firecracker
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp-restricted-psp
+  namespace: mcp
+roleRef:
+  kind: ClusterRole
+  name: mcp-restricted-psp-user
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+- kind: ServiceAccount
+  name: mcp-gateway
+  namespace: mcp
+- kind: ServiceAccount
+  name: agent-registry
+  namespace: mcp
+- kind: ServiceAccount
+  name: vector-store
+  namespace: mcp
+- kind: ServiceAccount
+  name: state-controller
+  namespace: mcp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp-firecracker-psp
+  namespace: mcp
+roleRef:
+  kind: ClusterRole
+  name: mcp-firecracker-psp-user
+  apiGroup: rbac.authorization.k8s.io
+subjects:
+- kind: ServiceAccount
+  name: agent-runner
+  namespace: mcp
+---
+# Kyverno policy for image verification
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: mcp-verify-images
+spec:
+  validationFailureAction: enforce
+  background: false
+  rules:
+  - name: verify-agent-images
+    match:
+      resources:
+        kinds:
+        - Pod
+        namespaces:
+        - mcp
+    verifyImages:
+    - image: "ghcr.io/ggdc/agents/*"
+      key: |-
+        -----BEGIN PUBLIC KEY-----
+        MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7MdAkH3TDRkjpCMw5fG6I3qfKqFY
+        7V98jDaXnJj0OjrJ+fS8V0fpz1HCFQHg5M0LmfGqJYPh0mPPvOLW7mHFOA==
+        -----END PUBLIC KEY-----
+  - name: verify-mcp-components
+    match:
+      resources:
+        kinds:
+        - Pod
+        namespaces:
+        - mcp
+    verifyImages:
+    - image: "ghcr.io/ggdc/mcp-*"
+      key: |-
+        -----BEGIN PUBLIC KEY-----
+        MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7MdAkH3TDRkjpCMw5fG6I3qfKqFY
+        7V98jDaXnJj0OjrJ+fS8V0fpz1HCFQHg5M0LmfGqJYPh0mPPvOLW7mHFOA==
+        -----END PUBLIC KEY-----
+---
+# OPA Gatekeeper constraints for PII handling
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: mcppiihandling
+spec:
+  crd:
+    spec:
+      names:
+        kind: MCPPIIHandling
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            requiredLabels:
+              type: array
+              items:
+                type: string
+  targets:
+  - target: admission.k8s.gatekeeper.sh
+    rego: |
+      package mcppiihandling
+      
+      violation[{"msg": msg}] {
+        required_labels := input.parameters.requiredLabels
+        container := input.review.object.spec.containers[_]
+        env := container.env[_]
+        env.name == "PROCESS_PII"
+        env.value == "true"
+        
+        provided_labels := input.review.object.metadata.labels
+        required := required_labels[_]
+        not provided_labels[required]
+        
+        msg := sprintf("Container processing PII must have label: %v", [required])
+      }
+      
+      violation[{"msg": msg}] {
+        container := input.review.object.spec.containers[_]
+        env := container.env[_]
+        env.name == "PRIVACY_CLASS"
+        env.value == "High"
+        
+        not container.volumeMounts[_].name == "tmpfs"
+        
+        msg := "High privacy class containers must use tmpfs volume"
+      }
+---
+apiVersion: mcppiihandling.constraints.gatekeeper.sh/v1beta1
+kind: MCPPIIHandling
+metadata:
+  name: must-have-pii-labels
+spec:
+  match:
+    kinds:
+    - apiGroups: ["apps"]
+      kinds: ["Deployment", "StatefulSet"]
+    namespaces: ["mcp"]
+  parameters:
+    requiredLabels:
+    - "compliance.grayghostai.com/pii-processing"
+    - "compliance.grayghostai.com/data-classification"
+---
+# Falco rules for runtime security (to be implemented)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-rules
+  namespace: mcp
+data:
+  mcp_rules.yaml: |
+    - rule: Unauthorized Process in Agent Container
+      desc: Detect processes that shouldn't run in agent containers
+      condition: >
+        container.id != host and
+        container.name startswith "agent-" and
+        not proc.name in (agent_allowed_processes)
+      output: >
+        Unauthorized process in agent container
+        (user=%user.name command=%proc.cmdline container=%container.name)
+      priority: WARNING
+      tags: [mcp, agent, process]
+    
+    - list: agent_allowed_processes
+      items: [agent, python3, node, java, sh, bash]
+    
+    - rule: Agent Writing to System Directory
+      desc: Detect agents writing to system directories
+      condition: >
+        container.name startswith "agent-" and
+        (fd.name startswith /etc/ or
+         fd.name startswith /usr/ or
+         fd.name startswith /bin/) and
+        (evt.type = write or evt.type = openat)
+      output: >
+        Agent attempting to write to system directory
+        (agent=%container.name file=%fd.name)
+      priority: ERROR
+      tags: [mcp, agent, filesystem]
+    
+    - rule: Agent Network Connection to Unauthorized Host
+      desc: Detect agents connecting to non-whitelisted hosts
+      condition: >
+        container.name startswith "agent-" and
+        evt.type in (connect, sendto) and
+        not fd.sip in (allowed_agent_ips)
+      output: >
+        Agent connection to unauthorized host
+        (agent=%container.name dest=%fd.sip:%fd.sport)
+      priority: WARNING
+      tags: [mcp, agent, network]
+    
+    - macro: allowed_agent_ips
+      condition: |
+        fd.sip in (openai_ips, canva_ips, aws_ips, twitter_ips)
+---
+# Secret encryption configuration
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cosign-public-keys
+  namespace: mcp
+type: Opaque
+data:
+  cosign.pub: |
+    LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUZrd0V3WUhLb1pJemowQ0FRWUlL
+    b1pJemowREFRY0RRZ0FFN01kQWtIM1REUmtqcENNdzVmRzZJM3FmS3FGWQo3Vjk4
+    akRhWG5KajBPanJKK2ZTOFYwZnB6MUhDRlFIZzVNMExtZkdxSllQaDBtUFB2T0xX
+    N21IRk9BPT0KLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0t
+---
+# Vault policy for MCP components
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-mcp-policies
+  namespace: mcp
+data:
+  mcp-gateway-policy.hcl: |
+    path "secret/data/mcp/oidc_jwks" {
+      capabilities = ["read"]
+    }
+    
+    path "secret/data/mcp/rate_limit_cfg" {
+      capabilities = ["read"]
+    }
+    
+    path "auth/kubernetes/role/mcp-gateway" {
+      capabilities = ["read"]
+    }
+  
+  agent-runner-policy.hcl: |
+    path "secret/data/mcp/openai_key" {
+      capabilities = ["read"]
+    }
+    
+    path "secret/data/mcp/canva_key" {
+      capabilities = ["read"]
+    }
+    
+    path "secret/data/mcp/agent_keys/*" {
+      capabilities = ["read"]
+    }
+    
+    path "transit/encrypt/pii-encryption" {
+      capabilities = ["create", "update"]
+    }
+    
+    path "transit/decrypt/pii-encryption" {
+      capabilities = ["create", "update"]
+    }
+  
+  vector-store-policy.hcl: |
+    path "secret/data/mcp/vector_store_password" {
+      capabilities = ["read"]
+    }
+    
+    path "database/creds/vector-store-role" {
+      capabilities = ["read"]
+    }

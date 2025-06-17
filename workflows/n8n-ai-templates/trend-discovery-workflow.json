@@ -1,0 +1,367 @@
+{
+  "name": "AI-Powered Trend Discovery",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a3d7f6e8-4b2c-4d5e-9f0a-1b2c3d4e5f6g",
+      "name": "Start",
+      "type": "n8n-nodes-base.start",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runEvery",
+        "interval": 1,
+        "unit": "hours"
+      },
+      "id": "b4e8f7d9-5c3d-5e6f-a0b1-2c3d4e5f6g7h",
+      "name": "Hourly Trigger",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [250, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://mcp-gateway.mcp:8080/agents/trend-scout",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"action\": \"discover_trends\",\n  \"data\": {\n    \"categories\": [\"security\", \"tech\", \"ai\"],\n    \"sources\": [\"rss\", \"google_trends\", \"social\"],\n    \"limit\": 20\n  },\n  \"context\": {\n    \"workflow_id\": \"{{ $workflow.id }}\",\n    \"execution_id\": \"{{ $execution.id }}\",\n    \"environment\": \"{{ $env.ENVIRONMENT }}\"\n  },\n  \"webhook_url\": \"{{ $webhookUrl }}\"\n}",
+        "options": {
+          "timeout": 120000,
+          "batching": {
+            "batch": {
+              "size": 10
+            }
+          }
+        }
+      },
+      "id": "c5f9g8ea-6d4e-6f7g-b1c2-3d4e5f6g7h8i",
+      "name": "Discover Trends",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.status }}",
+              "value2": "success"
+            }
+          ]
+        }
+      },
+      "id": "d6g0h9fb-7e5f-7g8h-c2d3-4e5f6g7h8i9j",
+      "name": "Check Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Process trends and filter by relevance\nconst trends = items[0].json.data.trends || [];\n\n// Filter trends with high relevance\nconst relevantTrends = trends.filter(trend => {\n  return trend.relevance_score >= 70;\n});\n\n// Sort by relevance and engagement potential\nrelevantTrends.sort((a, b) => {\n  const scoreA = a.relevance_score * 0.6 + (a.engagement_potential || 5) * 10 * 0.4;\n  const scoreB = b.relevance_score * 0.6 + (b.engagement_potential || 5) * 10 * 0.4;\n  return scoreB - scoreA;\n});\n\n// Take top 5 trends\nconst topTrends = relevantTrends.slice(0, 5);\n\n// Prepare for analysis\nreturn topTrends.map(trend => ({\n  json: {\n    trend: trend,\n    action: 'analyze_trend'\n  }\n}));"
+      },
+      "id": "e7h1i0gc-8f6g-8h9i-d3e4-5f6g7h8i9j0k",
+      "name": "Filter Trends",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://mcp-gateway.mcp:8080/agents/trend-scout",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "f8i2j1hd-9g7h-9i0j-e4f5-6g7h8i9j0k1l",
+      "name": "Analyze Each Trend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Combine analysis results and select best content opportunity\nconst analyses = items.map(item => item.json.data);\n\n// Find the best opportunity\nlet bestOpportunity = null;\nlet highestScore = 0;\n\nanalyses.forEach((analysis, index) => {\n  const score = (analysis.relevance_score || 0) * 0.3 + \n                (analysis.engagement_potential || 0) * 10 * 0.4 +\n                (analysis.longevity === 'long-term' ? 30 : analysis.longevity === 'short-term' ? 20 : 10) * 0.3;\n  \n  if (score > highestScore && analysis.recommendation === 'pursue') {\n    highestScore = score;\n    bestOpportunity = {\n      ...items[index].json.trend,\n      analysis: analysis,\n      opportunity_score: score\n    };\n  }\n});\n\nif (!bestOpportunity) {\n  throw new Error('No suitable content opportunity found');\n}\n\nreturn [{\n  json: {\n    action: 'generate_brief',\n    data: {\n      trends: [bestOpportunity],\n      target_audience: 'IT professionals and security teams',\n      platform_priority: ['linkedin', 'twitter', 'tiktok']\n    }\n  }\n}];"
+      },
+      "id": "g9j3k2ie-0h8i-0j1k-f5g6-7h8i9j0k1l2m",
+      "name": "Select Best Opportunity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://mcp-gateway.mcp:8080/agents/trend-scout",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "h0k4l3jf-1i9j-1k2l-g6h7-8i9j0k1l2m3n",
+      "name": "Generate Content Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "databasePage",
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_CONTENT_DB_ID }}",
+        "properties": "={{ $json.data.notion_properties }}",
+        "additionalFields": {}
+      },
+      "id": "i1l5m4kg-2j0k-2l3m-h7i8-9j0k1l2m3n4o",
+      "name": "Create in Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2,
+      "position": [1650, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://mcp-gateway.mcp:8080/agents/experiment-manager",
+        "method": "POST",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"action\": \"create\",\n  \"data\": {\n    \"content_data\": {\n      \"id\": \"{{ $('Create in Notion').item.json.id }}\",\n      \"notion_id\": \"{{ $('Create in Notion').item.json.id }}\",\n      \"content_type\": \"{{ $json.data.content_type }}\",\n      \"hook\": \"{{ $json.data.headline }}\",\n      \"variant_count\": 3\n    }\n  }\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "j2m6n5lh-3k1l-3m4n-i8j9-0k1l2m3n4o5p",
+      "name": "Create A/B Variants",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1850, 300]
+    },
+    {
+      "parameters": {
+        "channel": "content-alerts",
+        "text": "New Content Opportunity Discovered!",
+        "attachments": [
+          {
+            "color": "#00FF00",
+            "title": "{{ $('Generate Content Brief').item.json.data.headline }}",
+            "title_link": "{{ $('Create in Notion').item.json.url }}",
+            "text": "{{ $('Generate Content Brief').item.json.data.brief_lines.join('\\n') }}",
+            "fields": {
+              "fields": [
+                {
+                  "title": "Urgency",
+                  "value": "{{ $('Generate Content Brief').item.json.data.urgency_level }}",
+                  "short": true
+                },
+                {
+                  "title": "Type",
+                  "value": "{{ $('Generate Content Brief').item.json.data.content_type }}",
+                  "short": true
+                },
+                {
+                  "title": "Variants Created",
+                  "value": "{{ $json.data.variants.length }}",
+                  "short": true
+                }
+              ]
+            }
+          }
+        ],
+        "otherOptions": {}
+      },
+      "id": "k3n7o6mi-4l2m-4n5o-j9k0-1l2m3n4o5p6q",
+      "name": "Notify Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [2050, 300]
+    },
+    {
+      "parameters": {
+        "channel": "errors",
+        "text": "Error in Trend Discovery Workflow",
+        "attachments": [
+          {
+            "color": "#FF0000",
+            "title": "Workflow Error",
+            "text": "{{ $json.error || $json.message || 'Unknown error occurred' }}",
+            "fields": {
+              "fields": [
+                {
+                  "title": "Workflow",
+                  "value": "{{ $workflow.name }}",
+                  "short": true
+                },
+                {
+                  "title": "Execution ID",
+                  "value": "{{ $execution.id }}",
+                  "short": true
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "id": "l4o8p7nj-5m3n-5o6p-k0l1-2m3n4o5p6q7r",
+      "name": "Error Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [850, 500]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Discover Trends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hourly Trigger": {
+      "main": [
+        [
+          {
+            "node": "Discover Trends",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover Trends": {
+      "main": [
+        [
+          {
+            "node": "Check Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Success": {
+      "main": [
+        [
+          {
+            "node": "Filter Trends",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Trends": {
+      "main": [
+        [
+          {
+            "node": "Analyze Each Trend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Each Trend": {
+      "main": [
+        [
+          {
+            "node": "Select Best Opportunity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Best Opportunity": {
+      "main": [
+        [
+          {
+            "node": "Generate Content Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Content Brief": {
+      "main": [
+        [
+          {
+            "node": "Create in Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create in Notion": {
+      "main": [
+        [
+          {
+            "node": "Create A/B Variants",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create A/B Variants": {
+      "main": [
+        [
+          {
+            "node": "Notify Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "error-handler-workflow"
+  },
+  "tags": [
+    {
+      "name": "AI",
+      "id": "ai"
+    },
+    {
+      "name": "Content Discovery",
+      "id": "content-discovery"
+    }
+  ],
+  "id": "trend-discovery-ai-workflow"
+}

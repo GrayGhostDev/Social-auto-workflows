@@ -1,0 +1,133 @@
+# Production-specific patches for MCP components
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-gateway
+  namespace: mcp
+spec:
+  replicas: 3  # Higher base replicas for production
+  template:
+    spec:
+      containers:
+      - name: gateway
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 4
+            memory: 4Gi
+        env:
+        - name: LOG_LEVEL
+          value: "WARN"  # Less verbose logging in production
+        - name: RATE_LIMIT_MULTIPLIER
+          value: "2"  # Higher rate limits for production
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-runner-cpu
+  namespace: mcp
+spec:
+  replicas: 5  # More runners in production
+  template:
+    spec:
+      nodeSelector:
+        node.kubernetes.io/instance-type: "m5.4xlarge"  # Larger instances
+      containers:
+      - name: runner
+        resources:
+          requests:
+            cpu: 4
+            memory: 8Gi
+          limits:
+            cpu: 16
+            memory: 32Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vector-store
+  namespace: mcp
+spec:
+  replicas: 3  # 3-node cluster for production
+  template:
+    spec:
+      containers:
+      - name: postgres
+        resources:
+          requests:
+            cpu: 2
+            memory: 8Gi
+          limits:
+            cpu: 8
+            memory: 16Gi
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mcp-gateway
+  namespace: mcp
+spec:
+  minReplicas: 3
+  maxReplicas: 20  # Higher max for production
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60  # More aggressive scaling
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-runner-cpu
+  namespace: mcp
+spec:
+  minReplicas: 5
+  maxReplicas: 50  # Much higher max for production
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: agent-runner-gpu
+  namespace: mcp
+spec:
+  minReplicas: 1  # Always have 1 GPU runner ready
+  maxReplicas: 8  # Up to 8 GPU instances
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mcp-gateway
+  namespace: mcp
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: mcp-gateway
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: agent-runner
+  namespace: mcp
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: agent-runner
+      compute-type: cpu
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vector-store
+  namespace: mcp
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: vector-store

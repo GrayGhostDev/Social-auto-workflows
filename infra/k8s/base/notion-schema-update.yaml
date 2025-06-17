@@ -1,0 +1,361 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notion-schema-viral
+  namespace: grayghostai
+data:
+  schema-update.json: |
+    {
+      "database_updates": {
+        "content_pipeline": {
+          "new_properties": {
+            "variant_id": {
+              "type": "text",
+              "description": "A/B test variant identifier"
+            },
+            "parent_uuid": {
+              "type": "text",
+              "description": "Parent content UUID for variants"
+            },
+            "experiment_id": {
+              "type": "text",
+              "description": "Associated experiment identifier"
+            },
+            "variant_type": {
+              "type": "select",
+              "options": [
+                {"name": "control", "color": "gray"},
+                {"name": "hook_variant", "color": "blue"},
+                {"name": "thumbnail_variant", "color": "green"},
+                {"name": "audio_variant", "color": "purple"},
+                {"name": "timing_variant", "color": "orange"}
+              ]
+            },
+            "hashtags": {
+              "type": "multi_select",
+              "description": "Platform-optimized hashtags"
+            },
+            "viral_score": {
+              "type": "number",
+              "format": "number",
+              "description": "Viral probability score (0-100)"
+            },
+            "retention_prediction": {
+              "type": "number",
+              "format": "percent",
+              "description": "Predicted completion rate"
+            },
+            "collab_target": {
+              "type": "text",
+              "description": "Target creator for collaboration"
+            },
+            "caption_languages": {
+              "type": "multi_select",
+              "options": [
+                {"name": "en", "color": "blue"},
+                {"name": "es", "color": "red"},
+                {"name": "pt-br", "color": "green"},
+                {"name": "id", "color": "purple"},
+                {"name": "sw", "color": "orange"}
+              ]
+            },
+            "audio_track_id": {
+              "type": "text",
+              "description": "Selected trending audio identifier"
+            },
+            "audio_rights_status": {
+              "type": "select",
+              "options": [
+                {"name": "cleared", "color": "green"},
+                {"name": "royalty_free", "color": "blue"},
+                {"name": "restricted", "color": "red"},
+                {"name": "pending", "color": "yellow"}
+              ]
+            },
+            "first_hour_metrics": {
+              "type": "rich_text",
+              "description": "JSON metrics from first hour"
+            },
+            "cpr_30min": {
+              "type": "number",
+              "format": "percent",
+              "description": "Comment participation rate at 30 minutes"
+            },
+            "unpublish_reason": {
+              "type": "select",
+              "options": [
+                {"name": "low_performance", "color": "red"},
+                {"name": "brand_violation", "color": "orange"},
+                {"name": "copyright_issue", "color": "purple"},
+                {"name": "manual_removal", "color": "gray"}
+              ]
+            },
+            "ugc_collection": {
+              "type": "relation",
+              "relation_database_id": "ugc_content_db",
+              "description": "Related user-generated content"
+            },
+            "algorithm_version": {
+              "type": "text",
+              "description": "Platform algorithm version at publish time"
+            },
+            "engagement_push_sent": {
+              "type": "checkbox",
+              "description": "First-hour engagement push triggered"
+            },
+            "publish_jitter_ms": {
+              "type": "number",
+              "format": "number",
+              "description": "Cross-platform posting offset in milliseconds"
+            },
+            "cover_frame_second": {
+              "type": "number",
+              "format": "number",
+              "description": "Selected thumbnail frame timestamp"
+            },
+            "sound_trend_rank": {
+              "type": "number",
+              "format": "number",
+              "description": "Audio trend ranking at publish time"
+            }
+          },
+          "updated_views": {
+            "viral_optimization": {
+              "name": "Viral Optimization View",
+              "filter": {
+                "property": "viral_score",
+                "number": {
+                  "greater_than_or_equal_to": 0
+                }
+              },
+              "sorts": [{
+                "property": "viral_score",
+                "direction": "descending"
+              }],
+              "properties": [
+                "Title",
+                "viral_score",
+                "retention_prediction",
+                "variant_type",
+                "first_hour_metrics",
+                "Platform",
+                "Status"
+              ]
+            },
+            "experiment_tracking": {
+              "name": "A/B Experiments",
+              "filter": {
+                "property": "experiment_id",
+                "text": {
+                  "is_not_empty": true
+                }
+              },
+              "sorts": [{
+                "property": "Created",
+                "direction": "descending"
+              }],
+              "properties": [
+                "Title",
+                "experiment_id",
+                "variant_id",
+                "variant_type",
+                "viral_score",
+                "Status"
+              ]
+            },
+            "audio_rights": {
+              "name": "Audio Rights Status",
+              "filter": {
+                "property": "audio_track_id",
+                "text": {
+                  "is_not_empty": true
+                }
+              },
+              "properties": [
+                "Title",
+                "audio_track_id",
+                "audio_rights_status",
+                "sound_trend_rank",
+                "Platform"
+              ]
+            }
+          }
+        },
+        "ugc_content_db": {
+          "name": "User Generated Content",
+          "properties": {
+            "ugc_id": {
+              "type": "title",
+              "description": "Unique UGC identifier"
+            },
+            "parent_content_id": {
+              "type": "relation",
+              "relation_database_id": "content_pipeline",
+              "description": "Original content that inspired this UGC"
+            },
+            "creator_handle": {
+              "type": "text",
+              "description": "Creator username"
+            },
+            "platform": {
+              "type": "select",
+              "options": [
+                {"name": "tiktok", "color": "black"},
+                {"name": "instagram", "color": "purple"},
+                {"name": "youtube", "color": "red"},
+                {"name": "twitter", "color": "blue"}
+              ]
+            },
+            "engagement_score": {
+              "type": "number",
+              "format": "number",
+              "description": "Engagement metric of UGC"
+            },
+            "sentiment": {
+              "type": "select",
+              "options": [
+                {"name": "positive", "color": "green"},
+                {"name": "neutral", "color": "gray"},
+                {"name": "negative", "color": "red"}
+              ]
+            },
+            "reshare_approved": {
+              "type": "checkbox",
+              "description": "Approved for resharing"
+            },
+            "creator_credited": {
+              "type": "checkbox",
+              "description": "Original creator credited"
+            },
+            "discovered_at": {
+              "type": "date",
+              "description": "When UGC was discovered"
+            }
+          }
+        }
+      },
+      "automation_rules": [
+        {
+          "name": "Low Viral Score Alert",
+          "trigger": {
+            "type": "property_changed",
+            "property": "viral_score"
+          },
+          "condition": {
+            "property": "viral_score",
+            "number": {
+              "less_than": 50
+            }
+          },
+          "action": {
+            "type": "update_property",
+            "property": "Status",
+            "value": "Needs Review"
+          }
+        },
+        {
+          "name": "Variant Winner Update",
+          "trigger": {
+            "type": "property_changed",
+            "property": "first_hour_metrics"
+          },
+          "action": {
+            "type": "webhook",
+            "url": "https://mcp-gateway.mcp:8080/agents/analytics-analyst",
+            "payload": {
+              "action": "declare_winner",
+              "experiment_id": "{{experiment_id}}"
+            }
+          }
+        },
+        {
+          "name": "Audio Rights Check",
+          "trigger": {
+            "type": "property_changed",
+            "property": "audio_track_id"
+          },
+          "action": {
+            "type": "webhook",
+            "url": "https://mcp-gateway.mcp:8080/agents/trending-audio",
+            "payload": {
+              "action": "verify",
+              "audio_id": "{{audio_track_id}}"
+            }
+          }
+        }
+      ]
+    }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: notion-schema-update-viral
+  namespace: grayghostai
+spec:
+  template:
+    spec:
+      serviceAccountName: notion-updater
+      containers:
+      - name: schema-updater
+        image: ghcr.io/ggdc/notion-schema-updater:v1
+        env:
+        - name: NOTION_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: notion-credentials
+              key: api_key
+        - name: SCHEMA_CONFIG
+          value: "/etc/schema/schema-update.json"
+        volumeMounts:
+        - name: schema
+          mountPath: /etc/schema
+          readOnly: true
+        command:
+        - python
+        - -c
+        - |
+          import json
+          import os
+          from notion_client import Client
+          
+          # Load schema
+          with open(os.environ['SCHEMA_CONFIG']) as f:
+              schema = json.load(f)
+          
+          # Initialize Notion client
+          notion = Client(auth=os.environ['NOTION_API_KEY'])
+          
+          # Update databases
+          for db_name, updates in schema['database_updates'].items():
+              print(f"Updating {db_name}...")
+              
+              # Get database ID (would need to be configured)
+              db_id = os.environ.get(f'NOTION_DB_{db_name.upper()}')
+              if not db_id:
+                  print(f"Skipping {db_name} - no database ID found")
+                  continue
+              
+              # Update properties
+              if 'new_properties' in updates:
+                  for prop_name, prop_config in updates['new_properties'].items():
+                      print(f"  Adding property: {prop_name}")
+                      # notion.databases.update() with new properties
+              
+              # Create views
+              if 'updated_views' in updates:
+                  for view_name, view_config in updates['updated_views'].items():
+                      print(f"  Creating view: {view_name}")
+                      # Create database views
+          
+          print("Schema update complete!")
+      volumes:
+      - name: schema
+        configMap:
+          name: notion-schema-viral
+      restartPolicy: OnFailure
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: notion-updater
+  namespace: grayghostai

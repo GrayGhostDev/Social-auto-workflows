@@ -37,21 +37,50 @@ Key architectural decisions:
 social-auto-workflows/
 ├── .github/              # GitHub Actions workflows and configurations
 │   ├── workflows/        # CI/CD pipelines
+│   │   ├── ci.yml      # Main CI pipeline
+│   │   ├── deploy-*.yml # Environment deployments
+│   │   └── sbom-generation.yml # SBOM & compliance
 │   └── CODEOWNERS       # Code ownership definitions
 ├── docs/                # Documentation and runbooks
 │   ├── ARCHITECTURE.md  # System architecture documentation
 │   ├── DEPLOYMENT.md    # Deployment guide
+│   ├── IMPLEMENTATION_SUMMARY.md # Implementation status
+│   ├── GAP_ANALYSIS_CORRECTIONS.md # Gap analysis review
+│   ├── SLO_SLI_TARGETS.md # Service level objectives
 │   └── architecture-diagram.md  # Architecture diagrams
 ├── infra/              # Infrastructure as Code
 │   ├── terraform/      # Terraform modules for cloud resources
+│   │   ├── main.tf    # Core infrastructure
+│   │   ├── environments/ # Environment configs
 │   │   └── modules/    # Reusable modules (WAF, etc.)
+│   ├── ansible/       # Configuration management
+│   │   └── playbooks/ # CIS hardening playbooks
+│   ├── vault/         # Secret management
+│   │   └── secret-rotation.hcl # 90-day rotation
 │   ├── helm/          # Helm charts for Kubernetes deployments
+│   │   └── n8n/       # n8n configuration
 │   └── k8s/           # Kubernetes manifests
 │       ├── base/      # Base configurations
-│       │   └── monitoring/  # Prometheus, Loki, Grafana configs
+│       │   ├── monitoring/  # Prometheus, Loki, Grafana
+│       │   └── hpa-queue-scaling.yaml # Queue autoscaling
 │       └── overlays/  # Environment-specific overlays
 ├── workflows/          # n8n workflow definitions (JSON format)
+│   └── real-time-trend-miner.json # Core workflow
 ├── scripts/           # Utility and automation scripts
+│   ├── deploy-grayghost-ai.sh # Master deployment
+│   └── pull-n8n-docs.sh # n8n documentation fetcher
+├── n8n-nodes/         # Custom n8n node implementations
+│   ├── nodes/         # Node type definitions
+│   │   ├── TrendScout/
+│   │   ├── ExperimentManager/
+│   │   ├── TrendingAudio/
+│   │   └── RetentionPredictor/
+│   ├── credentials/   # Credential type definitions
+│   └── package.json   # n8n node package configuration
+├── agents/            # AI agent implementations
+│   ├── base/          # Base enterprise agent class
+│   ├── trend-scout/   # Trend Scout v2 implementation
+│   └── experiment-manager/ # A/B testing agent
 ├── tests/             # Test suites
 │   ├── unit/         # Unit tests
 │   ├── integration/  # Integration tests
@@ -141,6 +170,9 @@ GitHub Actions workflows handle automated testing and deployment:
 - `docs/CONTRIBUTING.md` - Contribution guidelines
 - `docs/SETUP_GUIDE.md` - Repository setup instructions
 - `docs/BRANCHING.md` - Detailed branching strategy
+- `docs/AI_AGENT_INSTALLATION_GUIDE.md` - AI agent deployment guide
+- `docs/N8N_NODES_INSTALLATION_GUIDE.md` - n8n custom nodes installation
+- `docs/vendor/n8n/` - Offline n8n documentation archive
 
 ### Infrastructure
 - `infra/k8s/base/` - Kubernetes base manifests
@@ -191,6 +223,58 @@ When creating n8n workflows:
 - Prometheus collects metrics every 15 seconds
 - Custom dashboards for system, n8n, brand compliance, and security
 - Sentry integration for Node.js error tracking
+
+## Implementation Status
+
+### ✅ Completed Features (Week 1)
+- **Queue-based autoscaling**: HPA scaling based on Redis queue length and P95 latency
+- **Vault secret rotation**: 90-day automatic rotation for all secrets
+- **SLO/SLI documentation**: Complete with error budgets and alerting
+- **SBOM generation**: Automated supply chain security with Cosign signing
+
+### ✅ Completed Features (Week 2)
+- **AI Agent Architecture**: Enterprise-grade agents following Anthropic best practices
+- **Viral Optimization**: 19 features for content virality (A/B testing, trending audio, ML retention)
+- **n8n AI Integration**: Advanced AI workflows with Claude integration
+- **Comprehensive Monitoring**: Prometheus metrics, Grafana dashboards, and alerts
+
+### 🚧 Pending Implementation (Week 3)
+1. **Cross-region database failover**: Aurora Global Database setup needed for 99.9% SLA
+2. **Runtime security (Falco)**: Container runtime monitoring and threat detection
+3. **Field-level PII encryption**: Transit encryption keys exist but need workflow integration
+4. **Advanced FinOps dashboard**: Cloud cost exporters and budget alerts required
+5. **GitHub OIDC**: Replace static AWS credentials with OIDC provider
+
+## AI Agent Architecture
+
+The platform now includes enterprise AI agents following Anthropic best practices:
+
+### Core Agents
+1. **Trend Scout v2**: Discovers and analyzes trending content opportunities
+2. **Experiment Manager**: A/B testing with statistical analysis
+3. **Trending Audio**: Audio trend discovery with rights verification
+4. **Retention Predictor**: ML-based video completion prediction
+5. **Content Strategist**: Brand-aligned content strategy
+6. **Visual Composer**: Enhanced with cover frame selection
+7. **Hook Crafter**: Dynamic hashtag and CTA generation
+
+### Key Features
+- **Structured Prompting**: XML-tagged prompts for better Claude responses
+- **Tool Use**: Agents can use multiple tools for complex tasks
+- **Enterprise Integration**: Full n8n workflow compatibility
+- **Comprehensive Monitoring**: Metrics, logs, and traces for all agents
+- **Retry Logic**: Exponential backoff with circuit breakers
+- **Caching**: Redis-based caching for expensive operations
+
+### n8n Integration
+All AI agents now have native n8n node types following n8n's built-in patterns:
+- **Custom Nodes**: TypeScript implementations with INodeType interface
+- **Credential Types**: Secure API key management for each agent
+- **Webhook Triggers**: Real-time event handling for agent events
+- **Resource/Operation Pattern**: Consistent UI/UX with n8n standards
+
+See `docs/N8N_NODES_INSTALLATION_GUIDE.md` for n8n node installation.
+See `docs/AI_AGENT_INSTALLATION_GUIDE.md` for agent deployment.
 
 ## Notes
 
