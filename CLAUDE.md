@@ -74,9 +74,17 @@ social-auto-workflows/
 │   │   ├── TrendScout/
 │   │   ├── ExperimentManager/
 │   │   ├── TrendingAudio/
-│   │   └── RetentionPredictor/
+│   │   ├── RetentionPredictor/
+│   │   └── MCPTool/   # MCP integration nodes
 │   ├── credentials/   # Credential type definitions
 │   └── package.json   # n8n node package configuration
+├── mcp-bridge/        # MCP Bridge service for n8n
+│   ├── src/           # TypeScript source code
+│   │   ├── middleware/ # Auth, error handling, metrics
+│   │   ├── services/  # MCP server and webhook managers
+│   │   └── routes/    # API endpoints
+│   ├── Dockerfile     # Production container
+│   └── package.json   # Node.js dependencies
 ├── agents/            # AI agent implementations
 │   ├── base/          # Base enterprise agent class
 │   ├── trend-scout/   # Trend Scout v2 implementation
@@ -172,6 +180,7 @@ GitHub Actions workflows handle automated testing and deployment:
 - `docs/BRANCHING.md` - Detailed branching strategy
 - `docs/AI_AGENT_INSTALLATION_GUIDE.md` - AI agent deployment guide
 - `docs/N8N_NODES_INSTALLATION_GUIDE.md` - n8n custom nodes installation
+- `docs/MCP_N8N_INTEGRATION.md` - MCP integration guide for n8n
 - `docs/vendor/n8n/` - Offline n8n documentation archive
 
 ### Infrastructure
@@ -184,6 +193,7 @@ GitHub Actions workflows handle automated testing and deployment:
   - `ingress.yaml` - Ingress with OAuth2 proxy
 - `infra/terraform/modules/waf/` - AWS WAF Terraform module
 - `infra/k8s/base/monitoring/` - Observability configurations
+- `infra/k8s/base/mcp-bridge-deployment.yaml` - MCP Bridge Kubernetes deployment
 
 ### Configuration
 - `.github/branch-protection-rules.json` - Branch protection configuration
@@ -238,7 +248,13 @@ When creating n8n workflows:
 - **n8n AI Integration**: Advanced AI workflows with Claude integration
 - **Comprehensive Monitoring**: Prometheus metrics, Grafana dashboards, and alerts
 
-### 🚧 Pending Implementation (Week 3)
+### ✅ Completed Features (Week 3)
+- **MCP Integration**: Model Context Protocol support for n8n workflows
+- **MCP Bridge Service**: Microservice bridging n8n and MCP servers
+- **Dynamic Tool Discovery**: Auto-discover tools from MCP servers
+- **Event-Driven Architecture**: Webhook triggers for MCP events
+
+### 🚧 Pending Implementation
 1. **Cross-region database failover**: Aurora Global Database setup needed for 99.9% SLA
 2. **Runtime security (Falco)**: Container runtime monitoring and threat detection
 3. **Field-level PII encryption**: Transit encryption keys exist but need workflow integration
@@ -272,9 +288,20 @@ All AI agents now have native n8n node types following n8n's built-in patterns:
 - **Credential Types**: Secure API key management for each agent
 - **Webhook Triggers**: Real-time event handling for agent events
 - **Resource/Operation Pattern**: Consistent UI/UX with n8n standards
+- **MCP Support**: Execute tools from any MCP-compatible server
+
+### MCP (Model Context Protocol) Integration
+The platform includes comprehensive MCP support:
+- **MCP Tool Node**: Execute tools from connected MCP servers
+- **MCP Tool Trigger**: Event-driven workflows based on MCP events
+- **MCP Bridge Service**: Kubernetes-native bridge service
+- **Multiple Server Support**: Connect to filesystem, GitHub, database, browser, and custom MCP servers
+- **Dynamic Tool Discovery**: Automatically discover available tools
+- **Secure Architecture**: JWT authentication, rate limiting, and network policies
 
 See `docs/N8N_NODES_INSTALLATION_GUIDE.md` for n8n node installation.
 See `docs/AI_AGENT_INSTALLATION_GUIDE.md` for agent deployment.
+See `docs/MCP_N8N_INTEGRATION.md` for MCP integration guide.
 
 ## Notes
 

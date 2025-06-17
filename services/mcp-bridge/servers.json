@@ -1,0 +1,54 @@
+{
+  "servers": [
+    {
+      "id": "filesystem",
+      "name": "Filesystem Server",
+      "description": "Provides file system operations",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
+      "capabilities": ["read", "write", "list"]
+    },
+    {
+      "id": "github",
+      "name": "GitHub Server",
+      "description": "Access GitHub repositories and operations",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "capabilities": ["read", "write", "search"]
+    },
+    {
+      "id": "postgres",
+      "name": "PostgreSQL Server",
+      "description": "Database operations for PostgreSQL",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {
+        "POSTGRES_CONNECTION_STRING": "${POSTGRES_URL}"
+      },
+      "capabilities": ["query", "execute"]
+    },
+    {
+      "id": "web",
+      "name": "Web Browser Server",
+      "description": "Web browsing and scraping capabilities",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "capabilities": ["browse", "screenshot", "scrape"]
+    },
+    {
+      "id": "slack",
+      "name": "Slack Server",
+      "description": "Slack workspace operations",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {
+        "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}",
+        "SLACK_APP_TOKEN": "${SLACK_APP_TOKEN}"
+      },
+      "capabilities": ["read", "write", "listen"]
+    }
+  ]
+}

@@ -1,0 +1,280 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-bridge-config
+  namespace: mcp
+data:
+  mcp-servers.json: |
+    [
+      {
+        "id": "filesystem",
+        "name": "Filesystem MCP Server",
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-filesystem"],
+        "description": "Provides file system access tools"
+      },
+      {
+        "id": "github",
+        "name": "GitHub MCP Server",
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-github"],
+        "description": "Provides GitHub repository access"
+      },
+      {
+        "id": "postgres",
+        "name": "PostgreSQL MCP Server",
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-postgres"],
+        "description": "Provides PostgreSQL database access"
+      },
+      {
+        "id": "web-browser",
+        "name": "Web Browser MCP Server",
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-puppeteer"],
+        "description": "Provides web browser automation"
+      },
+      {
+        "id": "slack",
+        "name": "Slack MCP Server",
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-slack"],
+        "description": "Provides Slack workspace access"
+      }
+    ]
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mcp-bridge-secret
+  namespace: mcp
+type: Opaque
+stringData:
+  jwt-secret: "changeme-$(openssl rand -hex 32)"
+  api-keys: |
+    {
+      "n8n-production": {
+        "apiKeyId": "n8n-prod-001",
+        "scopes": ["tools:execute", "servers:read", "webhooks:manage"]
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-bridge
+  namespace: mcp
+  labels:
+    app: mcp-bridge
+spec:
+  type: ClusterIP
+  ports:
+    - port: 3000
+      targetPort: 3000
+      protocol: TCP
+      name: http
+    - port: 9090
+      targetPort: 9090
+      protocol: TCP
+      name: metrics
+  selector:
+    app: mcp-bridge
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mcp-bridge
+  namespace: mcp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-bridge
+  namespace: mcp
+  labels:
+    app: mcp-bridge
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mcp-bridge
+  template:
+    metadata:
+      labels:
+        app: mcp-bridge
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: mcp-bridge
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: mcp-bridge
+        image: grayghostai/mcp-bridge:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 9090
+          name: metrics
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "3000"
+        - name: METRICS_PORT
+          value: "9090"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: CORS_ORIGINS
+          value: "http://n8n.grayghostai:5678,https://n8n.grayghostai.com"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: mcp-bridge-secret
+              key: jwt-secret
+        - name: MCP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: mcp-bridge-config
+              key: mcp-servers.json
+        - name: API_KEYS
+          valueFrom:
+            secretKeyRef:
+              name: mcp-bridge-secret
+              key: api-keys
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 3000
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+          readOnly: false
+      volumes:
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mcp-bridge-hpa
+  namespace: mcp
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mcp-bridge
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mcp-bridge-pdb
+  namespace: mcp
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: mcp-bridge
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-bridge-network-policy
+  namespace: mcp
+spec:
+  podSelector:
+    matchLabels:
+      app: mcp-bridge
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: grayghostai
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 3000
+    - protocol: TCP
+      port: 9090
+  egress:
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
