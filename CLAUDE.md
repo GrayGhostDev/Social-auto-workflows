@@ -85,6 +85,13 @@ social-auto-workflows/
 │   │   └── routes/    # API endpoints
 │   ├── Dockerfile     # Production container
 │   └── package.json   # Node.js dependencies
+├── docker/            # Docker configurations
+│   └── n8n/           # n8n Docker setup
+│       ├── docker-compose.yml # Complete stack configuration
+│       ├── Dockerfile # Custom n8n with GrayGhostAI nodes
+│       ├── nginx/     # Reverse proxy configuration
+│       ├── scripts/   # Update and maintenance scripts
+│       └── Makefile   # Management commands
 ├── agents/            # AI agent implementations
 │   ├── base/          # Base enterprise agent class
 │   ├── trend-scout/   # Trend Scout v2 implementation
@@ -143,6 +150,14 @@ npm run dev             # Start development server
 # Security
 npm audit              # Check for vulnerabilities
 npm audit fix         # Auto-fix vulnerabilities
+
+# Docker operations (from docker/n8n/)
+make up                  # Start n8n stack
+make down                # Stop n8n stack
+make logs                # View logs
+make backup              # Create backup
+make update              # Update n8n
+make scale-workers REPLICAS=4  # Scale workers
 ```
 
 ## CI/CD Pipeline
@@ -194,6 +209,11 @@ GitHub Actions workflows handle automated testing and deployment:
 - `infra/terraform/modules/waf/` - AWS WAF Terraform module
 - `infra/k8s/base/monitoring/` - Observability configurations
 - `infra/k8s/base/mcp-bridge-deployment.yaml` - MCP Bridge Kubernetes deployment
+- `docker/n8n/` - Docker Compose configuration for n8n
+  - `docker-compose.yml` - Full stack with PostgreSQL, Redis, n8n, workers
+  - `nginx/` - Reverse proxy with TLS and rate limiting
+  - `scripts/update-n8n.sh` - Zero-downtime update script
+  - `Makefile` - Management commands for Docker operations
 
 ### Configuration
 - `.github/branch-protection-rules.json` - Branch protection configuration
@@ -207,6 +227,27 @@ When creating n8n workflows:
 - Parameterize environment-specific values
 - Never hardcode credentials or API keys
 - Add documentation for complex logic
+
+### Docker Deployment
+
+The project includes a production-ready Docker configuration:
+
+```bash
+# Quick start
+cd docker/n8n
+make init      # Initialize environment
+make build     # Build custom n8n image
+make up        # Start all services
+make status    # Check service health
+```
+
+Key features:
+- **High Availability**: Multiple n8n workers with queue mode
+- **Security**: TLS, authentication, rate limiting via Nginx
+- **Custom Nodes**: Pre-installed GrayGhostAI and MCP nodes
+- **Zero-Downtime Updates**: Rolling update support
+- **Monitoring**: Health checks and Prometheus metrics
+- **Backup/Restore**: Automated backup functionality
 
 ## Architecture Key Points
 
@@ -253,6 +294,12 @@ When creating n8n workflows:
 - **MCP Bridge Service**: Microservice bridging n8n and MCP servers
 - **Dynamic Tool Discovery**: Auto-discover tools from MCP servers
 - **Event-Driven Architecture**: Webhook triggers for MCP events
+- **Docker Configuration**: Production-ready n8n Docker setup with:
+  - PostgreSQL HA and Redis cluster for queue management
+  - Zero-downtime update capability
+  - Custom n8n image with pre-installed GrayGhostAI nodes
+  - Nginx reverse proxy with TLS and rate limiting
+  - Comprehensive backup and restore functionality
 
 ### 🚧 Pending Implementation
 1. **Cross-region database failover**: Aurora Global Database setup needed for 99.9% SLA

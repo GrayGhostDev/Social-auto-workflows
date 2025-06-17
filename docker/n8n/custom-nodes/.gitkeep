@@ -1,0 +1,2 @@
+# This directory will contain the GrayGhostAI custom n8n nodes
+# Copy from ../../n8n-nodes/ or use 'make install-nodes'

@@ -1,0 +1,88 @@
+[
+  {
+    "id": "filesystem",
+    "name": "Filesystem MCP Server",
+    "type": "stdio",
+    "command": "npx",
+    "args": ["@modelcontextprotocol/server-filesystem", "--allowed-directories", "/data,/tmp"],
+    "description": "Provides file system access tools",
+    "metadata": {
+      "version": "1.0.0",
+      "author": "MCP Team",
+      "capabilities": ["read", "write", "list", "delete"]
+    }
+  },
+  {
+    "id": "github",
+    "name": "GitHub MCP Server",
+    "type": "stdio",
+    "command": "npx",
+    "args": ["@modelcontextprotocol/server-github"],
+    "description": "Provides GitHub repository access",
+    "metadata": {
+      "version": "1.0.0",
+      "author": "MCP Team",
+      "capabilities": ["repos", "issues", "pulls", "actions"]
+    },
+    "env": {
+      "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+    }
+  },
+  {
+    "id": "postgres",
+    "name": "PostgreSQL MCP Server",
+    "type": "stdio",
+    "command": "npx",
+    "args": ["@modelcontextprotocol/server-postgres"],
+    "description": "Provides PostgreSQL database access",
+    "metadata": {
+      "version": "1.0.0",
+      "author": "MCP Team",
+      "capabilities": ["query", "schema", "tables"]
+    },
+    "env": {
+      "POSTGRES_URL": "postgresql://n8n:${POSTGRES_PASSWORD}@postgres:5432/n8n"
+    }
+  },
+  {
+    "id": "web-browser",
+    "name": "Web Browser MCP Server",
+    "type": "stdio",
+    "command": "npx",
+    "args": ["@modelcontextprotocol/server-puppeteer", "--headless", "--no-sandbox"],
+    "description": "Provides web browser automation",
+    "metadata": {
+      "version": "1.0.0",
+      "author": "MCP Team",
+      "capabilities": ["navigate", "screenshot", "scrape", "interact"]
+    }
+  },
+  {
+    "id": "slack",
+    "name": "Slack MCP Server",
+    "type": "stdio",
+    "command": "npx",
+    "args": ["@modelcontextprotocol/server-slack"],
+    "description": "Provides Slack workspace access",
+    "metadata": {
+      "version": "1.0.0",
+      "author": "MCP Team",
+      "capabilities": ["messages", "channels", "users", "files"]
+    },
+    "env": {
+      "SLACK_TOKEN": "${SLACK_TOKEN}"
+    }
+  },
+  {
+    "id": "grayghostai",
+    "name": "GrayGhostAI Custom MCP Server",
+    "type": "websocket",
+    "url": "ws://grayghostai-mcp:8080",
+    "description": "Custom MCP server for GrayGhostAI operations",
+    "metadata": {
+      "version": "1.0.0",
+      "author": "GrayGhostAI Team",
+      "capabilities": ["agents", "content", "analytics", "brand"]
+    }
+  }
+]

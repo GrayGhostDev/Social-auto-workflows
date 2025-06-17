@@ -1,0 +1,3 @@
+# SSL certificates directory
+# Place cert.pem and key.pem here
+# Or use 'make generate-certs' for self-signed certificates
